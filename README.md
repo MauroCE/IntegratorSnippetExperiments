@@ -1,2 +1,2 @@
 # IntegratorSnippetExperiments
-Experiments about adaptivity with Integrator Snippets
+Experiments about adaptivity with Integrator Snippets.
