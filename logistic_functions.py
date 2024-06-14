@@ -3,8 +3,6 @@ import numpy as np
 import scipy as sp
 import jax.numpy as jnp
 from scipy.special import logsumexp
-import jax
-from particles.particles.resampling import essl, exp_and_normalise
 
 
 data = np.load("/Users/za19162/Documents/Code/integrator_snippets_exp/sonar.npy")
@@ -15,6 +13,59 @@ scales[0] = 20
 scales_jpn = jnp.asarray(scales)
 y_jnp = jnp.asarray(y)
 Z_jnp = jnp.asarray(Z)
+
+
+def exp_and_normalise(lw):
+    """FROM CHOPIN. Exponentiate, then normalise (so that sum equals one).
+
+    Arguments
+    ---------
+    lw : ndarray
+        log weights.
+
+    Returns
+    -------
+    W : ndarray of the same shape as lw
+        W = exp(lw) / sum(exp(lw))
+
+    Note
+    ----
+    uses the log_sum_exp trick to avoid overflow (i.e. subtract the max
+    before exponentiating)
+
+    See also
+    --------
+    log_sum_exp
+    log_mean_exp
+
+    """
+    w = np.exp(lw - lw.max())
+    return w / w.sum()
+
+
+def essl(lw):
+    """FROM CHOPIN!! ESS (Effective sample size) computed from log-weights.
+
+    Parameters
+    ----------
+    lw : (N, ) ndarray
+        log-weights
+
+    Returns
+    -------
+    float
+        the ESS of weights w = exp(lw), i.e. the quantity
+        sum(w**2) / (sum(w))**2
+
+    Note
+    ----
+    The ESS is a popular criterion to determine how *uneven* are the weights.
+    Its value is in the range [1, N], it equals N when weights are constant,
+    and 1 if all weights but one are zero.
+
+    """
+    w = np.exp(lw - lw.max())
+    return (w.sum()) ** 2 / np.sum(w ** 2)
 
 
 def log_prior(theta):
@@ -38,7 +89,7 @@ def log_temp_post(theta, gamma):
 def log_prior_vect(theta):
     """Log-prior is a product of 61 zero-mean normals with standard deviations 20, 5, ...., 5.
     Expects theta to be a matrix of shape (N, 61)."""
-    return -0.5*61*np.log(2*np.pi) - 0.5*np.log(400.*(25**60)) -0.5*np.sum((theta / scales)**2, axis=1)
+    return -0.5*61*np.log(2*np.pi) - 0.5*np.log(400.*(25**60)) - 0.5*np.sum((theta / scales)**2, axis=1)
 
 
 def log_likelihood_vect(theta):
@@ -58,25 +109,10 @@ def sample_prior(n, rng):
     return scales * rng.normal(loc=0.0, scale=1.0, size=(n, 61))
 
 
-# def next_annealing_param(gamma, ESSrmin, llk):
-#     """Finds the next annealing exponent by solving ESS(exp(llk)) = alpha * N.
-#     Here alpha is ESSrmin. Here llk is the log-likelihood, computed without exponent."""
-#     N = llk.shape[0]
-#     ESSmin = ESSrmin * N
-#     f = lambda e: essl(e * llk) - ESSmin
-#     if f(1.0 - gamma) > 0:  # we're done (last iteration)
-#         delta = 1.0 - gamma
-#         new_gamma = 1.0
-#         # set 1. manually so that we can safely test == 1.
-#     else:
-#         delta = sp.optimize.brentq(f, 1.0e-12, 1.0 - gamma)  # secant search
-#         # left endpoint is >0, since f(0.) = nan if any likelihood = -inf
-#         new_gamma = gamma + delta
-#     return new_gamma
-
 def next_annealing_param(gamma, ESSrmin, llk):
     """Find next annealing exponent by solving ESS(exp(lw)) = alpha * N."""
     N = llk.shape[0]
+
     def f(e):
         ess = essl(e * llk) if e > 0.0 else N  # avoid 0 x inf issue when e==0
         return ess - ESSrmin * N
@@ -102,15 +138,8 @@ def next_annealing_param_unfolded(gamma, ESSrmin, lvn, lvd, nlps, nlls, T, N):
         else:
             ess = N
         return ess - ESSrmin * N
-    # if f(1. - gamma) < 0.:
-    #     if np.sign(f(gamma)) != np.sign(f(1.0)):
-    #         return sp.optimize.brentq(f, gamma, 1.0)  #gamma + sp.optimize.brentq(f, 0.0, 1.0 - gamma)
-    #     else:
-    #         return 1.0
-    # else:
-    #     return 1.0
     if np.sign(f(gamma)) != np.sign(f(1.0)):
-        return sp.optimize.brentq(f, gamma, 1.0)  #gamma + sp.optimize.brentq(f, 0.0, 1.0 - gamma)
+        return sp.optimize.brentq(f, gamma, 1.0)  # gamma + sp.optimize.brentq(f, 0.0, 1.0 - gamma)
     else:
         return 1.0
 
@@ -134,14 +163,15 @@ def grad_neg_post(theta, gamma):
     gnlp = theta / (scales**2)
     # Grad negative log likelihood (GNLL)
     arg = -y*theta.dot(Z.T)  # (N, 208)
-    gnll = - np.sum((np.exp(arg) / np.logaddexp(0.0, arg)) @ (y[:, None]*Z), axis=0) # (N, 208) x (208, 61) = (N, 61)
+    gnll = - np.sum((np.exp(arg) / np.logaddexp(0.0, arg)) @ (y[:, None]*Z), axis=0)  # (N, 208) x (208, 61) = (N, 61)
     return gamma*np.nan_to_num(gnll, copy=False, nan=-np.inf) + gnlp
 
 
 def grad_neg_log_post(theta, gamma):
     """Gradient of negative log posterior. Theta (N, 61). Z (208, 61), y (208,)."""
     gnl_prior = theta / (scales**2)
-    return gnl_prior - gamma*np.matmul(np.exp(-np.logaddexp(0.0, y[None, :] * theta.dot(Z.T))) * y[None, :], Z)  # (N, 61)
+    return gnl_prior - gamma*np.matmul(
+        np.exp(-np.logaddexp(0.0, y[None, :] * theta.dot(Z.T))) * y[None, :], Z)  # (N, 61)
 
 
 def neg_log_likelihood_jax(theta):
@@ -149,6 +179,7 @@ def neg_log_likelihood_jax(theta):
     and its gradient. Computes it for one particle, hence theta is a vector of shape (61,)."""
     nll = jnp.sum(jnp.logaddexp(0.0, -y_jnp*Z_jnp.dot(theta)))  # scalar
     return jnp.nan_to_num(nll, copy=False, nan=-jnp.inf)
+
 
 def hmc_integrator(x, v, L, epsilon, grad_U_vect, gamma):
     """L steps of Leapfrog integrator with step size epsilon."""
@@ -161,10 +192,10 @@ def hmc_integrator(x, v, L, epsilon, grad_U_vect, gamma):
     v = v - 0.5*epsilon*grad_U_vect(x, gamma)
 
     # L - 1 full position and momentum steps
-    for l in range(L - 1):
+    for ell in range(L - 1):
         x = x + epsilon*v                      # Full position step
         v = v - epsilon*grad_U_vect(x, gamma)  # Full momentum step
-        trajectory[:, l+1] = np.hstack((x, v))
+        trajectory[:, ell+1] = np.hstack((x, v))
 
     # Final position half-step
     x = x + 0.5*epsilon*v
