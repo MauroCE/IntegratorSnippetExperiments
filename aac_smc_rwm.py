@@ -4,8 +4,8 @@ WASTE-FREE SMC USING RWM.
 import pickle
 import numpy as np
 import scipy as sp
-from logistic_functions import sample_prior, next_annealing_param, log_likelihood_vect
-from logistic_functions import log_prior_vect, path_sampling_estimate
+from aaa_logistic_functions import sample_prior, next_annealing_param, log_likelihood_vect
+from aaa_logistic_functions import log_prior_vect, path_sampling_estimate
 from particles.particles.resampling import systematic, wmean_and_var
 
 
