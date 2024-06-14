@@ -114,5 +114,5 @@ if __name__ == "__main__":
             out = smc_rwm(n_particles=N, n_mcmc=K, verbose=True, seed=int(seeds[i]))
             res.update({'type': 'tempering', 'logLt': out['logLt'], 'waste': False, 'out': out})
             results.append(res)
-    with open("results_full_mauro_smcrwm.pkl", "wb") as file:
-        pickle.dump(results, file)
+    # with open("results/results_full_mauro_smcrwm.pkl", "wb") as file:
+    #     pickle.dump(results, file)
