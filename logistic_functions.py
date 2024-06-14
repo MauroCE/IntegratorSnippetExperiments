@@ -3,6 +3,7 @@ import numpy as np
 import scipy as sp
 import jax.numpy as jnp
 from scipy.special import logsumexp
+from particles.particles.resampling import essl, exp_and_normalise
 
 
 data = np.load("/Users/za19162/Documents/Code/integrator_snippets_exp/sonar.npy")
@@ -13,59 +14,6 @@ scales[0] = 20
 scales_jpn = jnp.asarray(scales)
 y_jnp = jnp.asarray(y)
 Z_jnp = jnp.asarray(Z)
-
-
-def exp_and_normalise(lw):
-    """FROM CHOPIN. Exponentiate, then normalise (so that sum equals one).
-
-    Arguments
-    ---------
-    lw : ndarray
-        log weights.
-
-    Returns
-    -------
-    W : ndarray of the same shape as lw
-        W = exp(lw) / sum(exp(lw))
-
-    Note
-    ----
-    uses the log_sum_exp trick to avoid overflow (i.e. subtract the max
-    before exponentiating)
-
-    See also
-    --------
-    log_sum_exp
-    log_mean_exp
-
-    """
-    w = np.exp(lw - lw.max())
-    return w / w.sum()
-
-
-def essl(lw):
-    """FROM CHOPIN!! ESS (Effective sample size) computed from log-weights.
-
-    Parameters
-    ----------
-    lw : (N, ) ndarray
-        log-weights
-
-    Returns
-    -------
-    float
-        the ESS of weights w = exp(lw), i.e. the quantity
-        sum(w**2) / (sum(w))**2
-
-    Note
-    ----
-    The ESS is a popular criterion to determine how *uneven* are the weights.
-    Its value is in the range [1, N], it equals N when weights are constant,
-    and 1 if all weights but one are zero.
-
-    """
-    w = np.exp(lw - lw.max())
-    return (w.sum()) ** 2 / np.sum(w ** 2)
 
 
 def log_prior(theta):
