@@ -6,6 +6,7 @@ from scipy.special import logsumexp
 from aaa_logistic_functions import sample_prior, next_annealing_param
 import numpy.linalg as la
 import pickle
+from copy import deepcopy
 
 
 def nlp_gnlp_nll_and_gnll(_X, _y, _Z, _scales):
@@ -114,10 +115,13 @@ def smc_hmc_int_snip(N, Tmax, epsilon_init, _y, _Z, _scales, ESSrmin=0.9, seed=1
     kappas = []
     gammas = [0.0]
     logLt_traj = [0.0]
+    Ts_history = [Ts]
+    tau_history = [Tmax*epsilon_init]
+
     n = 1
 
     while gammas[n-1] < 1.0:
-        verboseprint("Iteration: ", n, " Gamma: ", gammas[n-1])
+        verboseprint("Iteration: ", n, " Gamma: ", gammas[n-1], " Ts: ", Ts, " epsilons: ", epsilons)
 
         # --- CHOOSE WHICH PARTICLES WILL BE ASSIGNED TO WHICH EPSILON/T COMBINATION.
         iotas = np.array(rng.choice(a=len(epsilons), size=N))  # one flag for each particle
@@ -215,6 +219,7 @@ def smc_hmc_int_snip(N, Tmax, epsilon_init, _y, _Z, _scales, ESSrmin=0.9, seed=1
         if np.all(Ts == Ts[0]) and np.all(epsilons == epsilons[0]):  # e.g. at the first iteration
             # First iteration: all three groups are the same, so it's easy to estimate the integration time
             lmax = longest_batches[-1].max()  # Maximum index at which a U-turn happened
+            verboseprint("\tAll equal. lmax: ", lmax)
             # Only update the total integration time if the longest batch is larger than Tmin
             if lmax > Tmin:
                 tau = lmax * epsilons[0]  # total integration time to U-turn
@@ -230,9 +235,9 @@ def smc_hmc_int_snip(N, Tmax, epsilon_init, _y, _Z, _scales, ESSrmin=0.9, seed=1
                     verboseprint("\tITERATION1: Ts: ", Ts, " Epsilons: ", epsilons)
             else:
                 if np.all(np.array(mips[-1]) > 0.4):
-                    # This means that integration time is not enough, we need to increase it. We keep Ts fixed and we
+                    # This means that integration time is not enough, we need to increase it. We keep Ts fixed, and we
                     # just increase all step sizes with a multiplicative factor. Try doubling it.
-                    epsilons *= (mult**n)
+                    epsilons = epsilons * mult
                     tau = np.unique(Ts * epsilons)[0]  # there should be only one value TODO: CHECK
                     verboseprint("\tITERATION1: Ts: ", Ts, " Epsilons: ", epsilons, " tau: ", tau)
         else:
@@ -253,33 +258,44 @@ def smc_hmc_int_snip(N, Tmax, epsilon_init, _y, _Z, _scales, ESSrmin=0.9, seed=1
                 # if ESS_folded < ESSrmin*N:
                 # CASE 1: If it is only the last one, then we find the midpoint
                 if (ess_folded_by_group[-1] < ESSrmin*N/3) and np.all(ess_folded_by_group[:-1] >= ESSrmin*N/3):
+                    Ts = np.array([Ts[0], int(0.5*(Ts[0] + Ts[-1])), int(0.5*(Ts[-2] + Ts[-1]))])
                     # Spread T towards the left
-                    Ts[-1] = int(0.5*(Ts[-2] + Ts[-1]))  # TODO: Ceiling or flooring might be better
-                    Ts[-2] = int(0.5*(Ts[0] + Ts[-1]))   # TODO: SAME
+                    # Ts[-1] = int(0.5*(Ts[-2] + Ts[-1]))  # TODO: Ceiling or flooring might be better
+                    # Ts[-2] = int(0.5*(Ts[0] + Ts[-1]))   # TODO: SAME
                     # Update the step sizes
                     epsilons = np.array([tau / t for t in Ts])  # todo: check total integration time constraint
                     verboseprint("\tCASE1: Ts: ", Ts, " Epsilons: ", epsilons)
                 # CASE 2: If first one is OK, but other two are not, then IDK
                 elif np.all(ess_folded_by_group[-2:] < ESSrmin*N/3) and ess_folded_by_group[0] >= ESSrmin*N/3:
                     # Shift both
-                    Ts[-1] = int(0.5*(Ts[0] + Ts[1]))
-                    Ts[-2] = int(0.5*(Ts[0] + Ts[-1]))
+                    Ts = np.array([
+                        Ts[0],
+                        int(0.5 * (Ts[0] + Ts[-1])),
+                        int(0.5*(Ts[0] + Ts[1]))
+                    ])
+                    # Ts[-1] = int(0.5*(Ts[0] + Ts[1]))
+                    # Ts[-2] = int(0.5*(Ts[0] + Ts[-1]))
                     # Update step sizes
                     epsilons = np.array([tau / t for t in Ts])  # todo: check total integration time constraint
                     verboseprint("\tCASE2: Ts: ", Ts, " Epsilons: ", epsilons)
             else:
                 # NO U-TURN DETECTED. IF
                 if np.all(np.array(mips[-1]) > 0.4):
-                    epsilons *= (mult**n)  # double the step sizes, keep Ts the same
+                    epsilons = epsilons * mult  # double the step sizes, keep Ts the same
                     tau = np.unique(Ts * epsilons)[0]  # there should be only one value TODO: CHECK
                     verboseprint("\tCASE3: Ts: ", Ts, " Epsilons: ", epsilons, " tau: ", tau)
+        # STORE
+        epsilons_history.append(epsilons)
+        Ts_history.append(Ts)
+        tau_history.append(tau)
         ess.append(ESS_folded)
 
         n += 1
 
     return {'logLt': logLt, 'pms': pms, 'mips': mips, 'ess': ess, 'longest_batches': longest_batches,
             'ess_running': ess_running, 'Ts': Ts, 'epsilons_history': epsilons_history, 'kappas': kappas,
-            'ess_by_group': ess_by_group, 'pds': pds, 'mpds': mpds, 'gammas': gammas, 'logLt_traj': logLt_traj}
+            'ess_by_group': ess_by_group, 'pds': pds, 'mpds': mpds, 'gammas': gammas, 'logLt_traj': logLt_traj,
+            'tau_history': tau_history, 'Ts_history': Ts_history}
 
 
 if __name__ == "__main__":
@@ -309,5 +325,5 @@ if __name__ == "__main__":
         results.append(res)
 
     # Save data
-    # with open("results/aad_is_hmc_3e_atis08_ft/T100/eps2_T100_N1000.pkl", "wb") as file:
-    #     pickle.dump(results, file)
+    with open("results/aaf_is_hmc_3e_atis08_at/T100/eps00001_T100_N1000.pkl", "wb") as file:
+        pickle.dump(results, file)
