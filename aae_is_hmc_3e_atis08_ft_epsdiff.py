@@ -1,11 +1,7 @@
 """
-INTEGRATOR SNIPPET.
-
-- NEW GAMMA FOUND USING "IMPORTANCE PART" OF THE WEIGHT.
-- THREE GROUPS SHARE EXACTLY THE SAME STEP SIZE AND INTEGRATION STEPS: THIS IS JUST FOR BENCHMARKING HERE.
-
-USER WILL PROVIDE AN INITIAL INTEGRATION TIME THROUGH A TMAX AND AN INITIAL STEP SIZE. THEN WE WILL KEEP INTEGRATION
-TIME FIXED AND VARY BOTH THE STEP SIZE AND THE NUMBER OF INTEGRATION STEPS.
+SIMILAR TO AAD BUT HERE EACH GROUP HAS A DIFFERENT STEP SIZE AND NUMBER OF INTEGRATION STEPS, BUT WE PERFORM NO
+STEP SIZE/INTEGRATION STEPS ADAPTATION. THE TEMPERING PARAMETER IS, AS USUAL, CHOSEN USING THE "IMPORTANCE PART" OF THE
+WEIGHT.
 """
 import numpy as np
 from scipy.special import logsumexp
@@ -73,32 +69,18 @@ def normalise_segmented_weights_and_compute_folded_ess(logw, iotas, Ts):
     return W_unfolded, np.array(ess_folded), ess_folded_total, logw_folded
 
 
-def smc_hmc_int_snip(N, T, epsilon, _y, _Z, _scales, ESSrmin=0.9, seed=1234, verbose=False):
-    """
-    Weight Decomposition
-    --------------------
-    We use the importance part of the (unfolded) weights to select the next tolerance.
-    The trajectory part of the (unfolded) weights is used to compute the folded weights from mu_n to mu_n, and we
-    compute the respective folded ESS for the three groups and use it to determine how good or bad the T/epsilon values
-    are.
-
-    Hyperparameters
-    ---------------
-    User provides the maximum sequential budget (Tmax) and the initial epsilon (epsilon_init), thus specifying a total
-    integration time tau = Tmax * epsilon_init. For now, we keep this fixed.
-
-
-    Iteration 0
-    -----------
-    We run all particles with T=Tmax and epsilon=epsilon_init, to get a baseline and see if it is even sensible.
-    """
+def smc_hmc_int_snip(N, epsilon_small, epsilon_medium, epsilon_large, T, _y, _Z, _scales, ESSrmin=0.9, seed=1234,
+                     verbose=False):
     # Setup
     rng = np.random.default_rng(seed=seed)
     verboseprint = print if verbose else lambda *a, **kwargs: None
     # Hyperparameter settings
-    tau = T * epsilon    # Fixed
-    Ts = np.array([T, T, T])  # Fixed
-    epsilons = np.array([tau/t for t in Ts])  # Fixed to epsilon_init
+    tau = T * epsilon_medium  # Fixed
+    epsilons = np.array([epsilon_small, epsilon_medium, epsilon_large])  # Provided by user
+    Ts = np.array([tau / epsilon_small, tau / epsilon_medium, tau / epsilon_large], dtype=np.int64)  # Fixed
+    if not np.all((Ts * epsilons) == tau):
+        raise ValueError("Have not found tau. Epsilons: ", epsilons, " Ts: ", Ts, " tau: ", tau, " taus: ",
+                         Ts * epsilons)
 
     # Initialise positions and velocities for N particles
     x = sample_prior(N, rng)                          # Positions (N, 61)
@@ -222,7 +204,8 @@ def smc_hmc_int_snip(N, T, epsilon, _y, _Z, _scales, ESSrmin=0.9, seed=1234, ver
 
     return {'logLt': logLt, 'pms': pms, 'mips': mips, 'ess': ess, 'longest_batches': longest_batches,
             'ess_running': ess_running, 'Ts': Ts, 'epsilons_history': epsilons_history, 'kappas': kappas,
-            'ess_by_group': ess_by_group, 'pds': pds, 'mpds': mpds, 'gammas': gammas, 'logLt_traj': logLt_traj}
+            'ess_by_group': ess_by_group, 'pds': pds, 'mpds': mpds, 'gammas': gammas, 'logLt_traj': logLt_traj,
+            'epsilons': epsilons, 'tau': tau}
 
 
 if __name__ == "__main__":
@@ -242,15 +225,15 @@ if __name__ == "__main__":
 
     for i in range(n_runs):
         _N = 1000
-        _T = 100
+        _T = 250
         print("T: ", _T)
         res = {'N': _N, 'T': _T}
-        out = smc_hmc_int_snip(N=_N, T=_T, epsilon=2, ESSrmin=0.8, _y=y, _Z=Z, _scales=scales, verbose=True,
-                               seed=int(seeds[i]))
+        out = smc_hmc_int_snip(N=_N, T=_T, epsilon_small=0.1, epsilon_medium=0.1, epsilon_large=5.0, ESSrmin=0.8, _y=y,
+                               _Z=Z, _scales=scales, verbose=True, seed=int(seeds[i]))
         res.update({'type': 'tempering', 'logLt': out['logLt'], 'waste': False, 'out': out})
         print("\t\tLogLt: ", out['logLt'])
         results.append(res)
 
     # Save data
-    # with open("results/aad_is_hmc_3e_atis08_ft/T100/eps2_T100_N1000.pkl", "wb") as file:
-    #     pickle.dump(results, file)
+    with open("results/aae_is_hmc_3e_atis08_ft_epsdiff/eps01_01_5_T250_N1000.pkl", "wb") as file:
+        pickle.dump(results, file)
