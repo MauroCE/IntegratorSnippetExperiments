@@ -227,26 +227,36 @@ def smc_hmc_int_snip(N, Tmax, epsilon_init, _y, _Z, _scales, ESSrmin=0.9, seed=1
                 Ts = np.array([Tmax, (Tmax - lmax - 1) // 2, lmax + 1])  # TODO: Might need some clipping
                 epsilons = np.array([tau/t for t in Ts])  # TODO: might need to check total integration time constant
         else:
+            # --- IDEA --- #
+            #    At any given iteration, all three groups share the same total integration time. This means that, on
+            #    average, they should find approximately the same longest batch. However, notice that the group using
+            #    the smallest step size, will likely be the most precise at identifying the U-turn. Hence we use that
+            lmax = longest_batches[-1][iotas == 0].max()
+            if lmax > Tmin:
+                tau = lmax * epsilons[0]  # this is likely going to decrease over iterations
+                verboseprint("\tTau: ", tau, " Since lmax: ", lmax)
+            # --- END OF IDEA --- #
             # In this case, the step sizes and number of integration steps will likely be different
             # TODO: except some possible clipping
             # This means that we only want to decrease the step size if the ESS of that group is too low.
             # TODO: Remember that there is an ordering
-            if ESS_folded < ESSrmin*N:
-                # CASE 1: If it is only the last one, then we find the midpoint
-                if (ess_folded_by_group[-1] < ESSrmin*N/3) and np.all(ess_folded_by_group[:-1] >= ESSrmin*N/3):
-                    # Spread T towards the left
-                    Ts[-1] = int(0.5*(Ts[-2] + Ts[-1]))  # TODO: Ceiling or flooring might be better
-                    Ts[-2] = int(0.5*(Ts[0] + Ts[-1]))   # TODO: SAME
-                    # Update the step sizes
-                    epsilons = np.array([tau / t for t in Ts])  # todo: check total integration time constraint
-                # CASE 2: If first one is OK, but other two are not, then IDK
-                elif np.all(ess_folded_by_group[-2:] < ESSrmin*N/3) and ess_folded_by_group[0] >= ESSrmin*N/3:
-                    # Shift both
-                    Ts[-1] = int(0.5*(Ts[0] + Ts[1]))
-                    Ts[-2] = int(0.5*(Ts[0] + Ts[-1]))
-                    # Update step sizes
-                    epsilons = np.array([tau / t for t in Ts])  # todo: check total integration time constraint
-            pass
+            # if ESS_folded < ESSrmin*N:
+            # CASE 1: If it is only the last one, then we find the midpoint
+            if (ess_folded_by_group[-1] < ESSrmin*N/3) and np.all(ess_folded_by_group[:-1] >= ESSrmin*N/3):
+                # Spread T towards the left
+                Ts[-1] = int(0.5*(Ts[-2] + Ts[-1]))  # TODO: Ceiling or flooring might be better
+                Ts[-2] = int(0.5*(Ts[0] + Ts[-1]))   # TODO: SAME
+                # Update the step sizes
+                epsilons = np.array([tau / t for t in Ts])  # todo: check total integration time constraint
+                verboseprint("\tCASE1: Ts: ", Ts, " Epsilons: ", epsilons)
+            # CASE 2: If first one is OK, but other two are not, then IDK
+            elif np.all(ess_folded_by_group[-2:] < ESSrmin*N/3) and ess_folded_by_group[0] >= ESSrmin*N/3:
+                # Shift both
+                Ts[-1] = int(0.5*(Ts[0] + Ts[1]))
+                Ts[-2] = int(0.5*(Ts[0] + Ts[-1]))
+                # Update step sizes
+                epsilons = np.array([tau / t for t in Ts])  # todo: check total integration time constraint
+                verboseprint("\tCASE2: Ts: ", Ts, " Epsilons: ", epsilons)
 
         ess.append(ESS_folded)
 
