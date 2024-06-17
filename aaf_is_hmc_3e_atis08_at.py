@@ -67,7 +67,8 @@ def normalise_segmented_weights_and_compute_folded_ess(logw, iotas, Ts):
     return W_unfolded, np.array(ess_folded), ess_folded_total, logw_folded
 
 
-def smc_hmc_int_snip(N, Tmax, epsilon_init, _y, _Z, _scales, ESSrmin=0.9, seed=1234, Tmin=2, verbose=False):
+def smc_hmc_int_snip(N, Tmax, epsilon_init, _y, _Z, _scales, ESSrmin=0.9, seed=1234, Tmin=2, verbose=False,
+                     mult=2.0):
     """
     Weight Decomposition
     --------------------
@@ -211,53 +212,67 @@ def smc_hmc_int_snip(N, Tmax, epsilon_init, _y, _Z, _scales, ESSrmin=0.9, seed=1
         )
 
         # ADAPT STEP SIZE, INTEGRATION TIME AND NUMBER OF INTEGRATION STEPS
-        if n == 1:
+        if np.all(Ts == Ts[0]) and np.all(epsilons == epsilons[0]):  # e.g. at the first iteration
             # First iteration: all three groups are the same, so it's easy to estimate the integration time
             lmax = longest_batches[-1].max()  # Maximum index at which a U-turn happened
             # Only update the total integration time if the longest batch is larger than Tmin
             if lmax > Tmin:
-                tau = lmax * epsilon_init  # total integration time to U-turn
-            # Otherwise ...
-            # FILL HERE
-            # Now, we need to check if indeed our epsilon_init is too large. Conditions might be redundant
-            if (ESS_folded < ESSrmin*N) and np.all(ess_folded_by_group < ESSrmin*N/3):
-                # Then, step size is too large. We have also likely a new tau so the easiest thing to do is to simply
-                # set epsilon = tau / Tmax. However, we want to be able to assess how well we are doing, so we create
-                # three groups.
-                Ts = np.array([Tmax, (Tmax - lmax - 1) // 2, lmax + 1])  # TODO: Might need some clipping
-                epsilons = np.array([tau/t for t in Ts])  # TODO: might need to check total integration time constant
+                tau = lmax * epsilons[0]  # total integration time to U-turn
+                # Otherwise ...
+                # FILL HERE
+                # Now, we need to check if indeed our epsilon_init is too large. Conditions might be redundant
+                if (ESS_folded < ESSrmin*N) and np.all(ess_folded_by_group < ESSrmin*N/3):
+                    # Then, step size is too large. We have also likely a new tau so the easiest thing to do is to
+                    # simply set epsilon = tau / Tmax. However, we want to be able to assess how well we are doing, so
+                    # we create three groups.
+                    Ts = np.array([Tmax, (Tmax - lmax - 1) // 2, lmax + 1])  # TODO: Might need some clipping
+                    epsilons = np.array([tau/t for t in Ts])  # TODO: need to check total integration time constant
+                    verboseprint("\tITERATION1: Ts: ", Ts, " Epsilons: ", epsilons)
+            else:
+                if np.all(np.array(mips[-1]) > 0.4):
+                    # This means that integration time is not enough, we need to increase it. We keep Ts fixed and we
+                    # just increase all step sizes with a multiplicative factor. Try doubling it.
+                    epsilons *= (mult**n)
+                    tau = np.unique(Ts * epsilons)[0]  # there should be only one value TODO: CHECK
+                    verboseprint("\tITERATION1: Ts: ", Ts, " Epsilons: ", epsilons, " tau: ", tau)
         else:
             # --- IDEA --- #
             #    At any given iteration, all three groups share the same total integration time. This means that, on
             #    average, they should find approximately the same longest batch. However, notice that the group using
-            #    the smallest step size, will likely be the most precise at identifying the U-turn. Hence we use that
+            #    the smallest step size, will likely be the most precise at identifying the U-turn. Hence, we use that.
+            #    ASSUMPTION: We assume that if there is no U-turn and mip/pm are high, then the step size is too small.
+            # --- END OF IDEA --- #
             lmax = longest_batches[-1][iotas == 0].max()
             if lmax > Tmin:
                 tau = lmax * epsilons[0]  # this is likely going to decrease over iterations
                 verboseprint("\tTau: ", tau, " Since lmax: ", lmax)
-            # --- END OF IDEA --- #
-            # In this case, the step sizes and number of integration steps will likely be different
-            # TODO: except some possible clipping
-            # This means that we only want to decrease the step size if the ESS of that group is too low.
-            # TODO: Remember that there is an ordering
-            # if ESS_folded < ESSrmin*N:
-            # CASE 1: If it is only the last one, then we find the midpoint
-            if (ess_folded_by_group[-1] < ESSrmin*N/3) and np.all(ess_folded_by_group[:-1] >= ESSrmin*N/3):
-                # Spread T towards the left
-                Ts[-1] = int(0.5*(Ts[-2] + Ts[-1]))  # TODO: Ceiling or flooring might be better
-                Ts[-2] = int(0.5*(Ts[0] + Ts[-1]))   # TODO: SAME
-                # Update the step sizes
-                epsilons = np.array([tau / t for t in Ts])  # todo: check total integration time constraint
-                verboseprint("\tCASE1: Ts: ", Ts, " Epsilons: ", epsilons)
-            # CASE 2: If first one is OK, but other two are not, then IDK
-            elif np.all(ess_folded_by_group[-2:] < ESSrmin*N/3) and ess_folded_by_group[0] >= ESSrmin*N/3:
-                # Shift both
-                Ts[-1] = int(0.5*(Ts[0] + Ts[1]))
-                Ts[-2] = int(0.5*(Ts[0] + Ts[-1]))
-                # Update step sizes
-                epsilons = np.array([tau / t for t in Ts])  # todo: check total integration time constraint
-                verboseprint("\tCASE2: Ts: ", Ts, " Epsilons: ", epsilons)
-
+                # In this case, the step sizes and number of integration steps will likely be different
+                # TODO: except some possible clipping
+                # This means that we only want to decrease the step size if the ESS of that group is too low.
+                # TODO: Remember that there is an ordering
+                # if ESS_folded < ESSrmin*N:
+                # CASE 1: If it is only the last one, then we find the midpoint
+                if (ess_folded_by_group[-1] < ESSrmin*N/3) and np.all(ess_folded_by_group[:-1] >= ESSrmin*N/3):
+                    # Spread T towards the left
+                    Ts[-1] = int(0.5*(Ts[-2] + Ts[-1]))  # TODO: Ceiling or flooring might be better
+                    Ts[-2] = int(0.5*(Ts[0] + Ts[-1]))   # TODO: SAME
+                    # Update the step sizes
+                    epsilons = np.array([tau / t for t in Ts])  # todo: check total integration time constraint
+                    verboseprint("\tCASE1: Ts: ", Ts, " Epsilons: ", epsilons)
+                # CASE 2: If first one is OK, but other two are not, then IDK
+                elif np.all(ess_folded_by_group[-2:] < ESSrmin*N/3) and ess_folded_by_group[0] >= ESSrmin*N/3:
+                    # Shift both
+                    Ts[-1] = int(0.5*(Ts[0] + Ts[1]))
+                    Ts[-2] = int(0.5*(Ts[0] + Ts[-1]))
+                    # Update step sizes
+                    epsilons = np.array([tau / t for t in Ts])  # todo: check total integration time constraint
+                    verboseprint("\tCASE2: Ts: ", Ts, " Epsilons: ", epsilons)
+            else:
+                # NO U-TURN DETECTED. IF
+                if np.all(np.array(mips[-1]) > 0.4):
+                    epsilons *= (mult**n)  # double the step sizes, keep Ts the same
+                    tau = np.unique(Ts * epsilons)[0]  # there should be only one value TODO: CHECK
+                    verboseprint("\tCASE3: Ts: ", Ts, " Epsilons: ", epsilons, " tau: ", tau)
         ess.append(ESS_folded)
 
         n += 1
@@ -287,8 +302,8 @@ if __name__ == "__main__":
         _T = 100
         print("T: ", _T)
         res = {'N': _N, 'T': _T}
-        out = smc_hmc_int_snip(N=_N, Tmax=_T, epsilon_init=2, ESSrmin=0.8, _y=y, _Z=Z, _scales=scales, verbose=True,
-                               seed=int(seeds[i]))
+        out = smc_hmc_int_snip(N=_N, Tmax=_T, epsilon_init=0.0001, ESSrmin=0.8, _y=y, _Z=Z, _scales=scales,
+                               verbose=True, seed=int(seeds[i]))
         res.update({'type': 'tempering', 'logLt': out['logLt'], 'waste': False, 'out': out})
         print("\t\tLogLt: ", out['logLt'])
         results.append(res)
