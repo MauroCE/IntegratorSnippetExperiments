@@ -10,6 +10,7 @@ Experiments about adaptivity with Integrator Snippets.
 - `ft` means that tau, the total integration time, is fixed. 
 - `at` means that the total integration time is chosen adaptively (using U-turns most likely).
 - `epsdiff` means that in the three groups we assume the step sizes are different (and so the number of integration steps), but we do not adapt.
+- `ua` means "unified adaptation", meaning we don't distinguish between iterations where T and epsilons are all equal, vs those where they are different.
 
 # Thoughts
 
