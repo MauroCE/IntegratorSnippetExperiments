@@ -123,18 +123,17 @@ if __name__ == "__main__":
     n_runs = 100
     overall_seed = 1234
     seeds = np.random.default_rng(overall_seed).integers(low=1, high=10000, size=n_runs)
-    N0 = 2 * 10 ** 5
-    Ks = [5, 20, 100, 500, 1000]   # K number of MCMC steps
-    Ms = [50, 100, 200, 400, 800]  # M number of resampled particles in Waste-Free smc
+    budget = 10**4
+    Ns = [10, 20, 50, 100, 200]  # Number of resampled particles
     results = []
-    for M, K in zip(Ms, Ks):
-        print("M: ", M)
+    for N in Ns:
+        print("N: ", N)
         for i in range(n_runs):
             print("\tRun: ", i)
-            N, lc = M, N0 // M  # lc is length of chain, here it is P
-            res = {'M': M, 'P': lc}
-            out = smc_wf_rwm(n_particles=M, len_chain=lc, verbose=False, seed=int(seeds[i]))
+            P = budget // N  # length of chain
+            res = {'N': N, 'P': P}
+            out = smc_wf_rwm(n_particles=N, len_chain=P, verbose=False, seed=int(seeds[i]))
             res.update({'type': 'tempering', 'logLt': out['logLt'], 'waste': False, 'out': out})
             results.append(res)
-    # with open("results/results_full_mauro_smc_wf_rwm_new.pkl", "wb") as file:
-    #     pickle.dump(results, file)
+    with open("results/aah_is_hmc_3e_atis08_ft_rep100_step01/wf_smc.pkl", "wb") as file:
+        pickle.dump(results, file)
