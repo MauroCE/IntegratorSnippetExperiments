@@ -135,5 +135,5 @@ if __name__ == "__main__":
             out = smc_wf_rwm(n_particles=N, len_chain=P, verbose=False, seed=int(seeds[i]))
             res.update({'type': 'tempering', 'logLt': out['logLt'], 'waste': False, 'out': out})
             results.append(res)
-    with open("results/aah_is_hmc_3e_atis08_ft_rep100_step01/wf_smc.pkl", "wb") as file:
+    with open("results/aah_is_hmc_3e_atfull08_ft_rep100/wf_smc.pkl", "wb") as file:
         pickle.dump(results, file)
