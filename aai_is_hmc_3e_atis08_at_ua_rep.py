@@ -274,7 +274,7 @@ if __name__ == "__main__":
     scales[0] = 20
 
     # Settings
-    n_runs = 5
+    n_runs = 100
     overall_seed = np.random.randint(low=10, high=29804393)  # 1234
     seeds = np.random.default_rng(overall_seed).integers(low=1, high=10000, size=n_runs)
     epsilons = [0.001, 0.1, 2.0]
@@ -293,5 +293,5 @@ if __name__ == "__main__":
             print("\t\tLogLt: ", out['logLt'])
             results.append(res)
 
-        with open(f"results/aai_is_hmc_3e_atis08_at_ua_rep/eps_ix{eps_ix}_adaptive.pkl", "wb") as file:
+        with open(f"results/aai_is_hmc_3e_atis08_at_ua_rep/eps_ix{eps_ix}_fixed_100runs.pkl", "wb") as file:
             pickle.dump(results, file)
