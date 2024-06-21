@@ -17,13 +17,13 @@ def smc_wf_rwm(n_particles, len_chain, maxiter=1000, ESSrmin=0.5, seed=1234, ver
     """
     # Setup
     rng = np.random.default_rng(seed=seed)
-    verboseprint = print if verbose else lambda *a, **k: None
+    verboseprint = print if verbose else lambda *a, **kwargs: None
     # Parameters, unsure if they are correct or not
     M = n_particles
     P = len_chain
-    N0 = M * P
+    N0 = M * len_chain
 
-    # Initialise particles. For Waste-Free we initialize N0 particles
+    # Initialise particles. For Waste-Free we initialise N0 particles
     x = sample_prior(N0, rng)  # (N0, 61)
     W = np.full(N0, 1/N0)       # (N0, )
     ll_curr = log_likelihood_vect(x)  # (N0, )
@@ -120,20 +120,20 @@ def smc_wf_rwm(n_particles, len_chain, maxiter=1000, ESSrmin=0.5, seed=1234, ver
 
 
 if __name__ == "__main__":
-    n_runs = 100
+    n_runs = 1  # 100
     overall_seed = 1234
     seeds = np.random.default_rng(overall_seed).integers(low=1, high=10000, size=n_runs)
     budget = 10**4
     Ns = [10, 20, 50, 100, 200]  # Number of resampled particles
     results = []
-    for N in Ns:
-        print("N: ", N)
+    for _N in Ns:
+        print("N: ", _N)
         for i in range(n_runs):
-            print("\tRun: ", i)
-            P = budget // N  # length of chain
-            res = {'N': N, 'P': P}
-            out = smc_wf_rwm(n_particles=N, len_chain=P, verbose=False, seed=int(seeds[i]))
+            _P = budget // _N  # length of chain
+            res = {'N': _N, 'P': _P}
+            out = smc_wf_rwm(n_particles=_N, len_chain=_P, verbose=False, seed=int(seeds[i]))
             res.update({'type': 'tempering', 'logLt': out['logLt'], 'waste': False, 'out': out})
             results.append(res)
-    with open("results/aah_is_hmc_3e_atfull08_ft_rep100/wf_smc.pkl", "wb") as file:
-        pickle.dump(results, file)
+            print("\tRun: ", i, " LogLt: ", out['logLt'])
+    # with open("results/aah_is_hmc_3e_atfull08_ft_rep100/wf_smc_new.pkl", "wb") as file:
+    #     pickle.dump(results, file)
