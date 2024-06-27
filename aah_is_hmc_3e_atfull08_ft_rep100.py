@@ -8,6 +8,7 @@ from scipy.special import logsumexp
 from aaa_logistic_functions import sample_prior, next_annealing_param_unfolded
 import numpy.linalg as la
 import pickle
+import time
 
 
 def nlp_gnlp_nll_and_gnll(_X, _y, _Z, _scales):
@@ -71,6 +72,7 @@ def normalise_segmented_weights_and_compute_folded_ess(logw, iotas, Ts):
 
 def smc_hmc_int_snip(N, epsilon, T, _y, _Z, _scales, ESSrmin=0.9, seed=1234, verbose=False):
     # Setup
+    start_time = time.time()
     rng = np.random.default_rng(seed=seed)
     verboseprint = print if verbose else lambda *a, **kwargs: None
 
@@ -188,7 +190,8 @@ def smc_hmc_int_snip(N, epsilon, T, _y, _Z, _scales, ESSrmin=0.9, seed=1234, ver
 
     return {'logLt': logLt, 'pms': pms, 'mips': mips, 'ess': ess, 'longest_batches': longest_batches,
             'ess_running': ess_running, 'T': T,  'epsilon': epsilon, 'kappas': kappas,
-            'ess_by_group': ess_by_group, 'pds': pds, 'mpds': mpds, 'gammas': gammas, 'logLt_traj': logLt_traj}
+            'ess_by_group': ess_by_group, 'pds': pds, 'mpds': mpds, 'gammas': gammas, 'logLt_traj': logLt_traj,
+            'runtime': time.time() - start_time}
 
 
 if __name__ == "__main__":
@@ -211,18 +214,21 @@ if __name__ == "__main__":
 
     for eps_ix, _epsilon in enumerate(epsilons):
         print("Epsilon: ", _epsilon)
-        results = []
-        for i in range(n_runs):
-            print("\tRUN: ", i)
-            for _N in N_list:
-                _T = budget // _N
-                res = {'N': _N, 'T': _T, 'epsilon': _epsilon}
-                out = smc_hmc_int_snip(N=_N, T=_T, epsilon=_epsilon, ESSrmin=0.8, _y=y,
-                                       _Z=Z, _scales=scales, verbose=False, seed=int(seeds[i]))
-                res.update({'out': out})
-                print("\t\tT: ", _T, "N: ", _N, " LogLt: ", out['logLt'])
-                results.append(res)
+        if eps_ix == 1:  # TODO: REMOVE THIS LINE IN REALITY
+            results = []
+            for i in range(n_runs):
+                print("\tRUN: ", i)
+                for _N in N_list:
+                    _T = budget // _N
+                    res = {'N': _N, 'T': _T, 'epsilon': _epsilon}
+                    out = smc_hmc_int_snip(N=_N, T=_T, epsilon=_epsilon, ESSrmin=0.8, _y=y,
+                                           _Z=Z, _scales=scales, verbose=False, seed=int(seeds[i]))
+                    res.update({'out': out})
+                    print("\t\tT: ", _T, "N: ", _N, " LogLt: ", out['logLt'])
+                    results.append(res)
 
-        # Save data
-        with open(f"results/aah_is_hmc_3e_atis08_ft_rep100_step01/eps_ix{eps_ix}.pkl", "wb") as file:
-            pickle.dump(results, file)
+            # Save data
+            # with open(f"results/aah_is_hmc_3e_atis08_ft_rep100_step01/eps_ix{eps_ix}_timed.pkl", "wb") as file:
+            #     pickle.dump(results, file)
+            with open(f"results/aah_is_hmc_3e_atfull08_ft_rep100/eps_ix{eps_ix}_timed.pkl", "wb") as file:
+                pickle.dump(results, file)

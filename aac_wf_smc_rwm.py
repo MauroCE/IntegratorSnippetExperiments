@@ -7,6 +7,7 @@ import scipy as sp
 from aaa_logistic_functions import sample_prior, next_annealing_param, log_likelihood_vect
 from aaa_logistic_functions import log_prior_vect, path_sampling_estimate
 from particles.particles.resampling import systematic, wmean_and_var
+import time
 
 
 def smc_wf_rwm(n_particles, len_chain, maxiter=1000, ESSrmin=0.5, seed=1234, verbose=False):
@@ -15,6 +16,7 @@ def smc_wf_rwm(n_particles, len_chain, maxiter=1000, ESSrmin=0.5, seed=1234, ver
     N: Number of particles.
     K: Number of MH steps per particle.
     """
+    start_time = time.time()
     # Setup
     rng = np.random.default_rng(seed=seed)
     verboseprint = print if verbose else lambda *a, **kwargs: None
@@ -116,11 +118,11 @@ def smc_wf_rwm(n_particles, len_chain, maxiter=1000, ESSrmin=0.5, seed=1234, ver
 
         n += 1
     return {'gammas': gammas, 'ps': path_sampling, 'mean_aps': mean_aps, 'ess': ess,
-            'means': means, 'variances': variances, 'x': x, 'logLt': logLt}
+            'means': means, 'variances': variances, 'x': x, 'logLt': logLt, 'runtime': time.time()-start_time}
 
 
 if __name__ == "__main__":
-    n_runs = 1  # 100
+    n_runs = 100  # 100
     overall_seed = 1234
     seeds = np.random.default_rng(overall_seed).integers(low=1, high=10000, size=n_runs)
     budget = 10**4
@@ -135,5 +137,5 @@ if __name__ == "__main__":
             res.update({'type': 'tempering', 'logLt': out['logLt'], 'waste': False, 'out': out})
             results.append(res)
             print("\tRun: ", i, " LogLt: ", out['logLt'])
-    # with open("results/aah_is_hmc_3e_atfull08_ft_rep100/wf_smc_new.pkl", "wb") as file:
-    #     pickle.dump(results, file)
+    with open("results/aah_is_hmc_3e_atfull08_ft_rep100/wf_smc_new_time.pkl", "wb") as file:
+        pickle.dump(results, file)

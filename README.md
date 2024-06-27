@@ -13,6 +13,8 @@ Experiments about adaptivity with Integrator Snippets.
 - `epsdiff` means that in the three groups we assume the step sizes are different (and so the number of integration steps), but we do not adapt.
 - `ua` means "unified adaptation", meaning we don't distinguish between iterations where T and epsilons are all equal, vs those where they are different.
 - `aah_is_hmc_3e_atis08_ft_ua_rep100_step01.py`:
+- `time` means we save runtimes
+- `pam` stands for parallel adaptation method, meaning that we want all three groups to have the same number of integration steps to preserve parallelism.
 
 # Thoughts
 

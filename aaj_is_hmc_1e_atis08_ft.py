@@ -10,6 +10,7 @@ from scipy.special import logsumexp
 from aaa_logistic_functions import sample_prior, next_annealing_param
 import numpy.linalg as la
 import pickle
+import time
 
 
 def nlp_gnlp_nll_and_gnll(_X, _y, _Z, _scales):
@@ -44,6 +45,7 @@ def smc_hmc_int_snip(N, T, epsilon, _y, _Z, _scales, ESSrmin=0.9, seed=1234, ver
     """
     Epsilon and tau fixed. Tempering found using importance part of the weight.
     """
+    start_time = time.time()
     # Setup
     rng = np.random.default_rng(seed=seed)
     verboseprint = print if verbose else lambda *a, **kwargs: None
@@ -156,7 +158,7 @@ def smc_hmc_int_snip(N, T, epsilon, _y, _Z, _scales, ESSrmin=0.9, seed=1234, ver
 
     return {'logLt': logLt, 'pms': pms, 'mips': mips, 'ess': ess, 'longest_batches': longest_batches,
             'ess_running': ess_running, 'kappas': kappas, 'pds': pds, 'mpds': mpds, 'gammas': gammas,
-            'logLt_traj': logLt_traj}
+            'logLt_traj': logLt_traj, 'runtime': time.time() - start_time}
 
 
 if __name__ == "__main__":
@@ -179,14 +181,15 @@ if __name__ == "__main__":
     for _N in N_list:
         print("N: ", _N)
         for i in range(n_runs):
-            _T = budget // _N
-            res = {'N': _N, 'T': _T}
-            out = smc_hmc_int_snip(N=_N, T=_T, epsilon=0.1, ESSrmin=0.8, _y=y, _Z=Z, _scales=scales, verbose=False,
-                                   seed=int(seeds[i]))
-            res.update({'type': 'tempering', 'logLt': out['logLt'], 'waste': False, 'out': out})
-            print("\t\tRun ", i, " LogLt: ", out['logLt'])
-            results.append(res)
+            if _N == 100 and i == 94:
+                _T = budget // _N
+                res = {'N': _N, 'T': _T}
+                out = smc_hmc_int_snip(N=_N, T=_T, epsilon=0.1, ESSrmin=0.8, _y=y, _Z=Z, _scales=scales, verbose=False,
+                                       seed=int(seeds[i]))
+                res.update({'type': 'tempering', 'logLt': out['logLt'], 'waste': False, 'out': out})
+                print("\t\tRun ", i, " LogLt: ", out['logLt'], " Runtime: ", out['runtime'])
+                results.append(res)
 
     # Save data
-    with open("results/aaj_is_hmc_1e_atis08_ft/int_snip_eps01.pkl", "wb") as file:
-        pickle.dump(results, file)
+    # with open("results/aaj_is_hmc_1e_atis08_ft/int_snip_eps01_time.pkl", "wb") as file:
+    #     pickle.dump(results, file)
