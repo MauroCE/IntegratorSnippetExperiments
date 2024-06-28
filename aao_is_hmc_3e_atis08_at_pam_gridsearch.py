@@ -1,6 +1,5 @@
 """
-Simpler adaptation scheme that preserves parallelism. I have copied AAM and then simplified from there, meaning
-that now the three groups keep the same number of integration steps.
+RATHER THAN RUNNING 100 RUNS WITH 3 STEP-SIZES, I RUN 100 STEP-SIZES ONE RUN EACH.
 """
 import numpy as np
 from scipy.special import logsumexp
@@ -227,8 +226,25 @@ def smc_hmc_int_snip(N, T, epsilon_init, _y, _Z, _scales, ESSrmin=0.9, seed=1234
                             verboseprint("\t\t\tESS,ESS+<alphaESS/3: Epsilons: ", epsilons)
                         else:
                             # no group has low ESS (all 3 is almost impossible) therefore we just adjust based on
-                            # group-wise max U-turns
-                            epsilons = lmax_groups * epsilons / T
+                            # group-wise max U-turns HOWEVER we must be careful. All we know is that one of them is lmax
+                            # and that it satisfies Tmin < lmax < T. However there are some break-cases:
+                            # 1. It can be that one or two of them have lmax=0, or lmax<Tmin, more generally.
+                            # 2. It can be that lmax are all above Tmin, but maybe the resulting taus (and thus eps)
+                            # are not in increasing order.
+                            if np.all(Tmin < lmax_groups) and np.all(lmax_groups < T):
+                                potential_taus = lmax_groups * epsilons
+                                if np.all(potential_taus[:-1] <= potential_taus[1:]):  # True when in increasing order
+                                    epsilons = potential_taus / T
+                                else:  # not in increasing order, simply take the maximum U-turn index
+                                    epsilons = lmax * epsilons / T
+                            #
+                            # if np.all(lmax_groups[:-1] <= lmax_groups[1:]):  # True when in increasing order
+                            #     # Make sure that all maximum U-turns are at least Tmin, if not, simply duplicate the
+                            #     # one that is within (Tmin, Tmax). Notice one must exist
+                            #     lmax_groups[lmax_groups <= Tmin] = min(lmax_groups[Tmin < lmax_groups < T])
+                            #     epsilons = lmax_groups * epsilons / T
+                            # else:
+                            #     epsilons = lmax * epsilons / T
                         taus = epsilons * T
                         verboseprint("\t\t\tTaus: ", taus)
                 else:
@@ -260,24 +276,22 @@ if __name__ == "__main__":
     scales[0] = 20
 
     # Settings
-    n_runs = 100
+    n_eps = 100
     overall_seed = np.random.randint(low=10, high=29804393)  # 1234
-    seeds = np.random.default_rng(overall_seed).integers(low=1, high=10000, size=n_runs)
-    _epsilons = [0.001, 0.1, 2.0]
+    seeds = np.random.default_rng(overall_seed).integers(low=1, high=10000, size=n_eps)
+    _epsilons = np.geomspace(start=0.001, stop=5.0, num=n_eps)  # TODO:REMOVE
     _N = 1000
     _T = 100
 
-    for eps_ix, _epsilon in enumerate(_epsilons):
+    results = []
+    for eps_ix, _epsilon in enumerate(_epsilons[98:99]):
         print("Epsilon: ", _epsilon)
-        if eps_ix == 1:
-            results = []
-            for i in range(n_runs):
-                res = {'N': _N, 'T': _T}
-                out = smc_hmc_int_snip(N=_N, T=_T, epsilon_init=_epsilon, ESSrmin=0.8, _y=y, _Z=Z, _scales=scales,
-                                       verbose=False, seed=int(seeds[i]), adaptive=True)
-                res.update({'type': 'tempering', 'logLt': out['logLt'], 'waste': False, 'out': out})
-                print("\t\tRun ", i, " LogLt: ", out['logLt'])
-                results.append(res)
+        res = {'N': _N, 'T': _T, 'epsilon': _epsilon}
+        out = smc_hmc_int_snip(N=_N, T=_T, epsilon_init=_epsilon, ESSrmin=0.8, _y=y, _Z=Z, _scales=scales,
+                               verbose=True, seed=int(seeds[eps_ix]), adaptive=True)
+        res.update({'type': 'tempering', 'logLt': out['logLt'], 'waste': False, 'out': out})
+        print("\t\tStep size: ", _epsilon, " LogLt: ", out['logLt'], " Final ESS: ", out['ess'][-1])
+        results.append(res)
 
-            with open(f"results/aan/eps_ix{eps_ix}_adaptive_100runs_timed_new.pkl", "wb") as file:
-                pickle.dump(results, file)
+    # with open(f"results/aao/eps_gridsearch_adaptive_100runs_timed.pkl", "wb") as file:
+    #     pickle.dump(results, file)

@@ -15,6 +15,7 @@ Experiments about adaptivity with Integrator Snippets.
 - `aah_is_hmc_3e_atis08_ft_ua_rep100_step01.py`:
 - `time` means we save runtimes
 - `pam` stands for parallel adaptation method, meaning that we want all three groups to have the same number of integration steps to preserve parallelism.
+- `gridsearch` just means that rather than running 100 runs for 3 step sizes, here I run it one time for 50 step sizes.
 
 # Thoughts
 
