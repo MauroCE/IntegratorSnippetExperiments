@@ -224,6 +224,14 @@ def smc_hmc_int_snip(N, T, epsilon_init, _y, _Z, _scales, ESSrmin=0.9, seed=1234
                                 0.5*epsilons[0] + 0.5*epsilons[1]
                             ])
                             verboseprint("\t\t\tESS,ESS+<alphaESS/3: Epsilons: ", epsilons)
+                        elif ess_folded_by_group[0] < ESSrmin*N/3 and np.all(ess_folded_by_group[1:] >= ESSrmin*N/3):
+                            # left and middle have low ESS, if additionally no U-turn, then too small: increase
+                            if lmax_groups[0] <= Tmin:
+                                epsilons = np.array([
+                                    0.5*epsilons[1] + 0.5*epsilons[2],
+                                    0.25*epsilons[1] + 0.75*epsilons[2],
+                                    epsilons[2]
+                                ])
                         else:
                             # no group has low ESS (all 3 is almost impossible) therefore we just adjust based on
                             # group-wise max U-turns HOWEVER we must be careful. All we know is that one of them is lmax
@@ -237,14 +245,6 @@ def smc_hmc_int_snip(N, T, epsilon_init, _y, _Z, _scales, ESSrmin=0.9, seed=1234
                                     epsilons = potential_taus / T
                                 else:  # not in increasing order, simply take the maximum U-turn index
                                     epsilons = lmax * epsilons / T
-                            #
-                            # if np.all(lmax_groups[:-1] <= lmax_groups[1:]):  # True when in increasing order
-                            #     # Make sure that all maximum U-turns are at least Tmin, if not, simply duplicate the
-                            #     # one that is within (Tmin, Tmax). Notice one must exist
-                            #     lmax_groups[lmax_groups <= Tmin] = min(lmax_groups[Tmin < lmax_groups < T])
-                            #     epsilons = lmax_groups * epsilons / T
-                            # else:
-                            #     epsilons = lmax * epsilons / T
                         taus = epsilons * T
                         verboseprint("\t\t\tTaus: ", taus)
                 else:
@@ -279,12 +279,12 @@ if __name__ == "__main__":
     n_eps = 100
     overall_seed = np.random.randint(low=10, high=29804393)  # 1234
     seeds = np.random.default_rng(overall_seed).integers(low=1, high=10000, size=n_eps)
-    _epsilons = np.geomspace(start=0.001, stop=5.0, num=n_eps)  # TODO:REMOVE
+    _epsilons = np.geomspace(start=0.001, stop=10.0, num=n_eps)
     _N = 1000
     _T = 100
 
     results = []
-    for eps_ix, _epsilon in enumerate(_epsilons[98:99]):
+    for eps_ix, _epsilon in enumerate(_epsilons):
         print("Epsilon: ", _epsilon)
         res = {'N': _N, 'T': _T, 'epsilon': _epsilon}
         out = smc_hmc_int_snip(N=_N, T=_T, epsilon_init=_epsilon, ESSrmin=0.8, _y=y, _Z=Z, _scales=scales,
@@ -293,5 +293,5 @@ if __name__ == "__main__":
         print("\t\tStep size: ", _epsilon, " LogLt: ", out['logLt'], " Final ESS: ", out['ess'][-1])
         results.append(res)
 
-    # with open(f"results/aao/eps_gridsearch_adaptive_100runs_timed.pkl", "wb") as file:
-    #     pickle.dump(results, file)
+    with open(f"results/aao/eps_gridsearch_adaptive_100runs_timed_new.pkl", "wb") as file:
+        pickle.dump(results, file)
