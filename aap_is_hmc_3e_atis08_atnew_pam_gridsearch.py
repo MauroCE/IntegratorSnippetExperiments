@@ -1,5 +1,10 @@
 """
-RATHER THAN RUNNING 100 RUNS WITH 3 STEP-SIZES, I RUN 100 STEP-SIZES ONE RUN EACH.
+HERE I CHANGE A FEW THINGS IN THE ADAPTIVITY:
+
+1. WHEN ONLY RIGHT GROUP HAS LOW ESS: KEEP THE LEFT AND MIDDLE GROUPS UNCHANGED AND ONLY CHANGE THE RIGHT GROUP. NOTICE
+   THAT IN PREVIOUS VERSIONS I CHANGED THE MIDDLE ONE TOO.
+2. PUT THE CHECK FOR LEFT & MIDDLE HAVING LOW ESS AND NO U TURNS - HOWEVER I HAVE FIXED THE BUG
+3. ADJUST INTEGRATION TIME MORE CLEVERLY BASED ON GROUPS, IF POSSIBLE
 """
 import numpy as np
 from scipy.special import logsumexp
@@ -68,6 +73,7 @@ def smc_hmc_int_snip(N, T, epsilon_init, _y, _Z, _scales, ESSrmin=0.9, seed=1234
     logLt_traj = [0.0]
     tau_history = [taus]
     n_unique = []
+    adapt_choice = []
 
     n = 1
 
@@ -177,82 +183,58 @@ def smc_hmc_int_snip(N, T, epsilon_init, _y, _Z, _scales, ESSrmin=0.9, seed=1234
 
         # --- ADAPT EPSILON ---
         if adaptive:
-            if np.all(np.array(pms[-1]) <= pm_min):
-                # Step size is way too large, half it
+            # Only consider three scenarios (L, L, L), (S, S, S), (-L, L, L), (S, S, -S))
+            lmax_groups = np.array([longest_batches[-1][iotas == group].max() for group in range(3)])  # group-wise
+            lmax = lmax_groups.max()  # Overall maximum U-turn index for the whole population
+            verboseprint("\tLongest batch: ", lmax, " LB-Groups: ", lmax_groups)
+
+            if np.all(np.array(pms[-1]) <= pm_min):  # All epsilons are excessively large, decrease crudely
                 epsilons = epsilons / mult
                 taus = epsilons * T
                 verboseprint("\t\t\tPMS<PM_MIN: T: ", T, " Epsilons: ", epsilons, " taus: ", taus)
-            else:
-                # Compute lmax for the whole population
-                lmax_groups = np.array([longest_batches[-1][iotas == group].max() for group in range(3)])
-                lmax = lmax_groups.max()  # Overall maximum U-turn index
-                verboseprint("\tLongest batch: ", lmax, " LB-Groups: ", lmax_groups)
-                # Assumption: step size too small when no U-turn is detected and mip/pm are high and ESS is borderline
-                if Tmin < lmax < T:  # U-turn detected: integration time is too large (we are doubling back)
-                    verboseprint("\tTmin < lmax < Tmax")
-                    # When 3 groups are equal, then we find the new integration time using lmax
-                    if np.all(taus == taus[0]) and np.all(epsilons == epsilons[0]):
-                        if (ESS_folded < ESSrmin*N) and np.all(ess_folded_by_group < ESSrmin*N/3):
-                            # Step size too large: create 3 groups with increasing (but smaller) step sizes
-                            taus = epsilons[0] * np.floor(
-                                np.quantile(longest_batches[-1], q=[0.5, 0.75, 1.0])
-                            ).astype(int)
-                            verboseprint("\t\t\tESS<alphaESS. taus: ", taus)
-                        else:
-                            # if everything is okay, simply reduce to the maximum U-turn index
-                            taus = lmax * epsilons
-                        epsilons = taus / T
-                        verboseprint("\t\tEpsilons: ", epsilons)
-                    else:
-                        # 3 groups have different epsilon/tau but the same T. Remember that we always keep T fixed,
-                        # meaning that we will use the U-turn statistics per group to adjust any step size/tau
-                        if (ess_folded_by_group[-1] < ESSrmin*N/3) and np.all(ess_folded_by_group[:-1] >= ESSrmin*N/3):
-                            # right group (large step size, small tau) has low ESS.
-                            # Keep left step size unchanged. Move right one between right one and middle one,
-                            # and then move middle one between left and right.
-                            epsilons = np.array([
-                                epsilons[0],
-                                0.5*epsilons[0] + 0.25*epsilons[1] + 0.25*epsilons[2],
-                                0.5*(epsilons[1] + epsilons[2])
-                            ])
-                            verboseprint("\t\t\tESS+<alphaESS/3: Epsilons: ", epsilons)
-                        elif np.all(ess_folded_by_group[-2:] < ESSrmin*N/3) and ess_folded_by_group[0] >= ESSrmin*N/3:
-                            # both middle and right group have low ESS.
-                            epsilons = np.array([
-                                epsilons[0],
-                                0.75*epsilons[0] + 0.25*epsilons[1],
-                                0.5*epsilons[0] + 0.5*epsilons[1]
-                            ])
-                            verboseprint("\t\t\tESS,ESS+<alphaESS/3: Epsilons: ", epsilons)
-                        elif ess_folded_by_group[0] < ESSrmin*N/3 and np.all(ess_folded_by_group[1:] >= ESSrmin*N/3):
-                            # left and middle have low ESS, if additionally no U-turn, then too small: increase
-                            if lmax_groups[0] <= Tmin:
-                                epsilons = np.array([
-                                    0.5*epsilons[1] + 0.5*epsilons[2],
-                                    0.25*epsilons[1] + 0.75*epsilons[2],
-                                    epsilons[2]
-                                ])
-                        else:
-                            # no group has low ESS (all 3 is almost impossible) therefore we just adjust based on
-                            # group-wise max U-turns HOWEVER we must be careful. All we know is that one of them is lmax
-                            # and that it satisfies Tmin < lmax < T. However there are some break-cases:
-                            # 1. It can be that one or two of them have lmax=0, or lmax<Tmin, more generally.
-                            # 2. It can be that lmax are all above Tmin, but maybe the resulting taus (and thus eps)
-                            # are not in increasing order.
-                            if np.all(Tmin < lmax_groups) and np.all(lmax_groups < T):
-                                potential_taus = lmax_groups * epsilons
-                                if np.all(potential_taus[:-1] <= potential_taus[1:]):  # True when in increasing order
-                                    epsilons = potential_taus / T
-                                else:  # not in increasing order, simply take the maximum U-turn index
-                                    epsilons = lmax * epsilons / T
-                        taus = epsilons * T
-                        verboseprint("\t\t\tTaus: ", taus)
-                else:
-                    # No longest batch detected + large MIP --> step size too small, need to increase it
-                    if np.all(np.array(mips[-1]) > 0.4):
-                        epsilons = epsilons * mult  # double the step sizes, keep Ts the same
-                        taus = epsilons * T  # there should be only one value TODO: CHECK
-                        verboseprint("\t\t\tMIPS>0.4: T: ", T, " Epsilons: ", epsilons, " taus: ", taus)
+            elif Tmin < lmax < T:  # U-turns detected
+                if np.all(epsilons == epsilons[0]) and np.all(taus == taus[0]):  # All groups have the same epsilon/tau
+                    if np.all(ess_folded_by_group < ESSrmin*N/3):  # All epsilons are large, but not excessive
+                        taus = epsilons[0] * np.floor(
+                            np.quantile(longest_batches[-1], q=[0.5, 0.75, 1.0])
+                        ).astype(int)
+                        verboseprint("\t\t\tESS<alphaESS. taus: ", taus)
+                    # else:  # all step-sizes are good
+                    #     taus = lmax * epsilons  # reduce to maximum U-turn
+                    epsilons = taus / T
+                    verboseprint("\t\tEpsilons: ", epsilons)
+                else:  # groups have different step sizes
+                    if np.all(ess_folded_by_group[-2:] < ESSrmin*N/3) and ess_folded_by_group[0] >= ESSrmin*N/3:
+                        # middle and right have low ESS
+                        epsilons = np.array([
+                            epsilons[0],
+                            0.75 * epsilons[0] + 0.25 * epsilons[1],
+                            0.5 * epsilons[0] + 0.5 * epsilons[1]
+                        ])
+                        verboseprint("\t\t\tESS,ESS+<alphaESS/3: Epsilons: ", epsilons)
+                    elif (np.all(ess_folded_by_group[:-1] < ESSrmin*N/3) and ess_folded_by_group[-1] >= ESSrmin*N/3 and
+                          np.all(lmax_groups[:-1] <= Tmin)):
+                        # left and middle have low ESS, and no U-turns detected in those groups => low step sizes
+                        epsilons = np.array([
+                            0.5*epsilons[1] + 0.5*epsilons[2],
+                            0.25*epsilons[1] + 0.75*epsilons[2],
+                            epsilons[2]
+                        ])
+                    elif np.all(Tmin < lmax_groups) and np.all(lmax_groups < T):  # All max U-turns within range
+                        # Avoid break-cases such as: 1) some groups having lmax<Tmin (in particular lmax=0)
+                        # 2) all lmax > Tmin but epsilons*lmax_groups gives taus that are not in increasing order
+                        potential_taus = lmax_groups * epsilons
+                        if np.all(potential_taus[:-1] <= potential_taus[1:]):  # True when in increasing order
+                            epsilons = potential_taus / T
+                        else:  # not in increasing order, simply take the maximum U-turn index
+                            epsilons = lmax * epsilons / T
+                    taus = epsilons * T
+                    verboseprint("\t\t\tTaus: ", taus)
+            elif np.all(np.array(mips[-1]) > 0.4):  # No U-turn detected + high-mip/pm = excessively small step sizes
+                epsilons = epsilons * mult  # multiply the step sizes, keep Ts the same
+                taus = epsilons * T
+                verboseprint("\t\t\tMIPS>0.4: T: ", T, " Epsilons: ", epsilons, " taus: ", taus)
+
         # STORE
         epsilons_history.append(epsilons)
         tau_history.append(taus)
@@ -263,7 +245,8 @@ def smc_hmc_int_snip(N, T, epsilon_init, _y, _Z, _scales, ESSrmin=0.9, seed=1234
     return {'logLt': logLt, 'pms': pms, 'mips': mips, 'ess': ess, 'longest_batches': longest_batches,
             'ess_running': ess_running, 'T': T, 'epsilons_history': epsilons_history, 'kappas': kappas,
             'ess_by_group': ess_by_group, 'pds': pds, 'mpds': mpds, 'gammas': gammas, 'logLt_traj': logLt_traj,
-            'tau_history': tau_history, 'n_unique': n_unique, 'runtime': time.time() - start_time}
+            'tau_history': tau_history, 'n_unique': n_unique, 'runtime': time.time() - start_time,
+            'adapt_choice': adapt_choice}
 
 
 if __name__ == "__main__":
@@ -276,21 +259,25 @@ if __name__ == "__main__":
     scales[0] = 20
 
     # Settings
-    n_eps = 100
+    n_runs = 10
+    n_eps = 20
     overall_seed = np.random.randint(low=10, high=29804393)  # 1234
-    seeds = np.random.default_rng(overall_seed).integers(low=1, high=10000, size=n_eps)
+    seeds = np.random.default_rng(overall_seed).integers(low=1, high=10000, size=n_runs)
     _epsilons = np.geomspace(start=0.001, stop=10.0, num=n_eps)
     _N = 1000
     _T = 100
 
-    results = []
     for eps_ix, _epsilon in enumerate(_epsilons):
-        res = {'N': _N, 'T': _T, 'epsilon': _epsilon}
-        out = smc_hmc_int_snip(N=_N, T=_T, epsilon_init=_epsilon, ESSrmin=0.8, _y=y, _Z=Z, _scales=scales,
-                               verbose=False, seed=int(seeds[eps_ix]), adaptive=True)
-        res.update({'type': 'tempering', 'logLt': out['logLt'], 'waste': False, 'out': out})
-        print("\t\tStep size: ", _epsilon, " LogLt: ", out['logLt'], " Final ESS: ", out['ess'][-1])
-        results.append(res)
+        print("Epsilon: ", _epsilon)
+        results = []
+        for i in range(n_runs):
+            res = {'N': _N, 'T': _T, 'epsilon': _epsilon}
+            out = smc_hmc_int_snip(N=_N, T=_T, epsilon_init=_epsilon, ESSrmin=0.8, _y=y, _Z=Z, _scales=scales,
+                                   verbose=False, seed=int(seeds[i]), adaptive=True)
+            res.update({'type': 'tempering', 'logLt': out['logLt'], 'waste': False, 'out': out})
+            print("\t\tRun ", i, " LogLt: ", out['logLt'], " Final ESS: ", out['ess'][-1], 'final eps: ',
+                  out['epsilons_history'][-1])
+            results.append(res)
 
-    with open(f"results/aao/eps_gridsearch_adaptive_100runs_timed_new.pkl", "wb") as file:
-        pickle.dump(results, file)
+        # with open(f"results/aap/eps_ix{eps_ix}_adaptive_100runs_timed_gridsearch.pkl", "wb") as file:
+        #     pickle.dump(results, file)
