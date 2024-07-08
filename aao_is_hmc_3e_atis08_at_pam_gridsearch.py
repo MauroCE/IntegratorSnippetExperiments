@@ -276,21 +276,27 @@ if __name__ == "__main__":
     scales[0] = 20
 
     # Settings
-    n_eps = 100
+    n_runs = 10
+    n_eps = 20
     overall_seed = np.random.randint(low=10, high=29804393)  # 1234
-    seeds = np.random.default_rng(overall_seed).integers(low=1, high=10000, size=n_eps)
+    seeds = np.random.default_rng(overall_seed).integers(low=1, high=10000, size=n_runs)
     _epsilons = np.geomspace(start=0.001, stop=10.0, num=n_eps)
     _N = 1000
     _T = 100
+    ALL_RESULTS = []
 
-    results = []
     for eps_ix, _epsilon in enumerate(_epsilons):
-        res = {'N': _N, 'T': _T, 'epsilon': _epsilon}
-        out = smc_hmc_int_snip(N=_N, T=_T, epsilon_init=_epsilon, ESSrmin=0.8, _y=y, _Z=Z, _scales=scales,
-                               verbose=False, seed=int(seeds[eps_ix]), adaptive=True)
-        res.update({'type': 'tempering', 'logLt': out['logLt'], 'waste': False, 'out': out})
-        print("\t\tStep size: ", _epsilon, " LogLt: ", out['logLt'], " Final ESS: ", out['ess'][-1])
-        results.append(res)
+        print("Epsilon: ", _epsilon)
+        results = []
+        for i in range(n_runs):
+            res = {'N': _N, 'T': _T, 'epsilon': _epsilon}
+            out = smc_hmc_int_snip(N=_N, T=_T, epsilon_init=_epsilon, ESSrmin=0.8, _y=y, _Z=Z, _scales=scales,
+                                   verbose=False, seed=int(seeds[i]), adaptive=True)
+            res.update({'type': 'tempering', 'logLt': out['logLt'], 'waste': False, 'out': out})
+            print("\t\tStep size: ", _epsilon, " LogLt: ", out['logLt'], " Final ESS: ", out['ess'][-1], 'final eps: ',
+                  out['epsilons_history'][-1])
+            results.append(res)
+        ALL_RESULTS.append(results)
 
-    with open(f"results/aao/eps_gridsearch_adaptive_100runs_timed_new.pkl", "wb") as file:
-        pickle.dump(results, file)
+    with open(f"results/aao/eps_gridsearch_adaptive_100runs_timed_new_NEWGRID.pkl", "wb") as file:
+        pickle.dump(ALL_RESULTS, file)

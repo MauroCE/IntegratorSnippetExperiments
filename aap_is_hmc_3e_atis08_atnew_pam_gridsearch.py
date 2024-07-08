@@ -279,5 +279,5 @@ if __name__ == "__main__":
                   out['epsilons_history'][-1])
             results.append(res)
 
-        # with open(f"results/aap/eps_ix{eps_ix}_adaptive_100runs_timed_gridsearch.pkl", "wb") as file:
-        #     pickle.dump(results, file)
+        with open(f"results/aap/eps_ix{eps_ix}_adaptive_100runs_timed_gridsearch.pkl", "wb") as file:
+            pickle.dump(results, file)
