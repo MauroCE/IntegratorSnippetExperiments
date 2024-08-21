@@ -216,6 +216,8 @@ def smc_hmc_int_snip(N, T, _epsilons, _y, _Z, _scales, ESSrmin=0.9, seed=1234, v
         c2 = []
         c3 = []
         for group in range(3):
+            # STRATEGY 1 - PRETEND WE HAVE A DIFFERENT T
+            for t in range(1, T+1):
             c1.append(criteria_numerator(trajectories[iotas == group, :, :d], logw[iotas == group]))
             c2.append(criteria_denominator1(trajectories[iotas == group, :, :d], logw[iotas == group]))
             c3.append(c1[-1] / c2[-1])
@@ -247,10 +249,10 @@ if __name__ == "__main__":
     scales[0] = 20
 
     # Settings
-    n_runs = 20
+    n_runs = 5
     overall_seed = np.random.randint(low=10, high=29804393)  # 1234
     seeds = np.random.default_rng(overall_seed).integers(low=1, high=10000, size=n_runs)
-    _epsilons = np.array([1.0, 0.1, 0.01])
+    _epsilons = np.array([0.1, 0.1, 0.1])
     _N = 1000
     _T = 100
 
@@ -264,5 +266,5 @@ if __name__ == "__main__":
               out['epsilons_history'][-1])
         results.append(res)
 
-    with open(f"results/aaq/results.pkl", "wb") as file:
+    with open(f"results/aaq/results_01_01_01.pkl", "wb") as file:
         pickle.dump(results, file)
