@@ -36,18 +36,6 @@ def compute_folded_ess_for_each_k(logw):
         folded_ess[k-1] = 1 / np.sum(W_folded**2)
     return folded_ess
 
-
-def criteria_numerator(xnk, logw):
-    """Expects `xnk` of shape (N, T+1, d). Expects `logw` to be the unnormalized
-    unfolded weights of shape `(N, T+1)`."""
-    # Compute squared norm
-    mu_k_given_z = np.exp(logw - logsumexp(logw, axis=1, keepdims=True))  # (N, T+1)
-    diff = xnk - np.sum(xnk * mu_k_given_z[:, :, None], axis=1, keepdims=True)  # (N, 1, d)
-    sq_norm = np.linalg.norm(diff, axis=2)**2  # (N, T+1)
-    # Compute weighted squared norm and sum up
-    return np.sum(sq_norm * np.exp(logw - logsumexp(logw)))
-
-
 def criteria_numerator_upto_t(xnk, logw):
     """Only the outer expectation is truncated."""
     mu_k_given_z = np.exp(logw - logsumexp(logw, axis=1, keepdims=True))  # (N, T+1)
@@ -71,15 +59,6 @@ def criteria_numerator_upto_t_mean_upto_t(xnk, logw):
     return criteria  # (T+1)
 
 
-def criteria_denominator1(xnk, logw):
-    """Computes the denominator. Here we assume that we only use the uniform distribution for
-    the expectation inside the squared norm, not as the weighting."""
-    diff = xnk - np.mean(xnk, axis=1, keepdims=True)  # (N, 1, d)
-    sq_norm = np.linalg.norm(diff, axis=2)**2  # (N, T+1)
-    # Compute weighted squared norm and sum up
-    return np.sum(sq_norm * np.exp(logw - logsumexp(logw)))
-
-
 def true_criterion(xnk, logw, iotas):
     """True criterion, found using maths derivation on 22/08/2024.
     Expects xnk to have shape (N, T+1, d), logw to have shape (N, T+1) and iotas to have shape (N, )."""
@@ -91,6 +70,15 @@ def true_criterion(xnk, logw, iotas):
         flag = (iotas == group)
         sq_norm = np.linalg.norm(xnk[flag] - cond_exp[flag], axis=2)**2  # (NG, T+1)
         criteria.append(np.sum(sq_norm * W_unfolded[flag]))  # scalar for each grop
+    return criteria
+
+
+def uniform_criterion(xnk, iotas):
+    """Assumes uniform weights."""
+    sq_norm = np.linalg.norm(xnk - np.mean(xnk, axis=1, keepdims=True), axis=2) ** 2  # (N, T+1)
+    criteria = []
+    for group in range(3):
+        criteria.append(sq_norm[iotas == group].sum())
     return criteria
 
 
@@ -278,13 +266,9 @@ def smc_hmc_int_snip(N, T, _epsilons, _y, _Z, _scales, ESSrmin=0.9, seed=1234, v
         # criteria1.append(criteria)
 
         # truncate first sum
-        criteria = np.zeros((3, T+1))
-        for group in range(3):
-            criteria[group, :] = criteria_numerator_upto_t_mean_upto_t(
-                xnk=trajectories[iotas == group],
-                logw=logw[iotas == group]
-            )
-        criteria1.append(criteria)
+        criteria1.append(true_criterion(trajectories[:, :, :d], logw, iotas))
+        criteria2.append(uniform_criterion(trajectories[:, :, :d], iotas))
+        criteria3.append([c1/c2 for c1, c2 in zip(criteria1[-1], criteria2[-1])])
 
         # STORE
         epsilons_history.append(epsilons)
@@ -314,7 +298,7 @@ if __name__ == "__main__":
     n_runs = 5
     overall_seed = np.random.randint(low=10, high=29804393)  # 1234
     seeds = np.random.default_rng(overall_seed).integers(low=1, high=10000, size=n_runs)
-    _epsilons = np.array([2.0, 0.1, 0.01])
+    _epsilons = np.array([1.0, 0.1, 0.01])
     _N = 1000
     _T = 50
 
@@ -328,5 +312,5 @@ if __name__ == "__main__":
               out['epsilons_history'][-1])
         results.append(res)
 
-    with open(f"results/aaq/results_2_01_001_uptot_meanuptot_T{_T}.pkl", "wb") as file:
+    with open(f"results/aar/results_1_01_001_tc_ub.pkl", "wb") as file:  #tc=true criteria, ub=uniform baseline
         pickle.dump(results, file)
