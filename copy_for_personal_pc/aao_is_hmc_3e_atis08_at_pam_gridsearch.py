@@ -1,9 +1,9 @@
 """
-NO ADAPTATION, 3 EPSILONS, STORE CRITERIA ALONG SNIPPET. INTERMEDIARY DISTRIBUTIONS FOUND USING THE FULL WEIGHTS.
+RATHER THAN RUNNING 100 RUNS WITH 3 STEP-SIZES, I RUN 100 STEP-SIZES ONE RUN EACH.
 """
 import numpy as np
 from scipy.special import logsumexp
-from aaa_logistic_functions import sample_prior, next_annealing_param_unfolded
+from aaa_logistic_functions import sample_prior, next_annealing_param
 import numpy.linalg as la
 import pickle
 import time
@@ -36,60 +36,16 @@ def compute_folded_ess_for_each_k(logw):
         folded_ess[k-1] = 1 / np.sum(W_folded**2)
     return folded_ess
 
-def criteria_numerator_upto_t(xnk, logw):
-    """Only the outer expectation is truncated."""
-    mu_k_given_z = np.exp(logw - logsumexp(logw, axis=1, keepdims=True))  # (N, T+1)
-    diff = xnk - np.sum(xnk * mu_k_given_z[:, :, None], axis=1, keepdims=True)  # (N, 1, d)
-    sq_norm = np.linalg.norm(diff, axis=2)**2  # (N, T+1)
-    W = np.exp(logw - logsumexp(logw))
-    # compute cumulative sum of weighted squared norm and sum up
-    return np.cumsum(np.sum(sq_norm * W, axis=0))
 
-
-def criteria_numerator_upto_t_mean_upto_t(xnk, logw):
-    """Here we also compute the mean up to t."""
-    T = xnk.shape[1] - 1
-    w_folded = np.exp(logw - logsumexp(logw, axis=1, keepdims=True))  # (N, T+1)
-    W_unfolded = np.exp(logw - logsumexp(logw))  # (N, T+1)
-    criteria = np.zeros(T+1)
-    for t in range(T+1):
-        diff = xnk[:, :t] - np.sum(xnk[:, :t] * w_folded[:, :t, None], axis=1, keepdims=True)  # (N, t+1, d)
-        sq_norm = np.linalg.norm(diff, axis=2) # (N, t+1)
-        criteria[t] = np.sum(sq_norm * W_unfolded[:, :t])
-    return criteria  # (T+1)
-
-
-def true_criterion(xnk, logw, iotas):
-    """True criterion, found using maths derivation on 22/08/2024.
-    Expects xnk to have shape (N, T+1, d), logw to have shape (N, T+1) and iotas to have shape (N, )."""
-    W_unfolded = np.exp(logw - logsumexp(logw))  # (N, T+1) complete set of unfolded weights
-    mu_k_eps_given_z = np.exp(logw - logsumexp(logw, axis=1, keepdims=True))  # (N, T+1)
-    cond_exp = np.sum(xnk * mu_k_eps_given_z[:, :, None], axis=1, keepdims=True)  # (N, 1, d)
-    criteria = []
-    for group in range(3):
-        flag = (iotas == group)
-        sq_norm = np.linalg.norm(xnk[flag] - cond_exp[flag], axis=2)**2  # (NG, T+1)
-        criteria.append(np.sum(sq_norm * W_unfolded[flag]))  # scalar for each grop
-    return criteria
-
-
-def uniform_criterion(xnk, iotas):
-    """Assumes uniform weights."""
-    sq_norm = np.linalg.norm(xnk - np.mean(xnk, axis=1, keepdims=True), axis=2)**2  # (N, T+1)
-    criteria = []
-    for group in range(3):
-        criteria.append(sq_norm[iotas == group].sum())
-    return criteria
-
-
-def smc_hmc_int_snip(N, T, _epsilons, _y, _Z, _scales, ESSrmin=0.9, seed=1234, verbose=False):
+def smc_hmc_int_snip(N, T, epsilon_init, _y, _Z, _scales, ESSrmin=0.9, seed=1234, Tmin=2, verbose=False,
+                     mult=2.0, adaptive=True, pm_min=1e-2):
     start_time = time.time()
     # Setup
     rng = np.random.default_rng(seed=seed)
     verboseprint = print if verbose else lambda *a, **kwargs: None
     # Hyperparameter settings
-    epsilons = _epsilons
-    taus = T * epsilons
+    taus = np.array([T*epsilon_init]*3)
+    epsilons = taus/T
 
     # Initialise positions and velocities for N particles
     x = sample_prior(N, rng)                          # Positions (N, 61)
@@ -112,27 +68,15 @@ def smc_hmc_int_snip(N, T, _epsilons, _y, _Z, _scales, ESSrmin=0.9, seed=1234, v
     logLt_traj = [0.0]
     tau_history = [taus]
     n_unique = []
-    adapt_choice = []
-    # store criteria
-    criteria1 = [np.nan]
-    criteria2 = [np.nan]
-    criteria3 = [np.nan]
-    # k resampled
-    k_resampled = []
-    n_resampled = []
-    iotas_list = []
-
 
     n = 1
 
     while gammas[n-1] < 1.0:
-        verboseprint("Iteration: ", n, " Gamma: ", gammas[n-1], " T: ", T, " epsilons: ", epsilons, " taus: ", taus,
-                     " c1: ", criteria1[-1], " c2: ", criteria2[-1], " c3: ", criteria3[-1])
+        verboseprint("Iteration: ", n, " Gamma: ", gammas[n-1], " T: ", T, " epsilons: ", epsilons, " taus: ", taus)
 
         # --- CHOOSE WHICH PARTICLES WILL BE ASSIGNED TO WHICH EPSILON/T COMBINATION.
         iotas = np.array(rng.choice(a=len(epsilons), size=N))  # one flag for each particle
         epsilons_vector = epsilons.reshape(-1, 1)[iotas]  # use for integration
-        iotas_list.append(iotas)
 
         # --- CONSTRUCT TRAJECTORIES USING psi_{n-1} ---
         # Setup storage
@@ -162,20 +106,9 @@ def smc_hmc_int_snip(N, T, _epsilons, _y, _Z, _scales, ESSrmin=0.9, seed=1234, v
         trajectories[:, -1] = np.hstack((x, v))
 
         # --- SELECT NEXT TEMPERING PARAMETER BASED ON IMPORTANCE WEIGHT ---
-        # Compute next annealing parameter  ESSrmin, lvn, lvd, nlps, nlls, T, N
-        lvn = - 0.5*np.linalg.norm(trajectories[:, :, d:], axis=2)**2
-        lvd = - 0.5*np.linalg.norm(trajectories[:, 0, d:], axis=1)**2
-        gammas.append(
-            next_annealing_param_unfolded(
-                gamma=gammas[n-1],
-                ESSrmin=ESSrmin,
-                lvn=lvn,
-                lvd=lvd,
-                nlps=nlps,
-                nlls=nlls,
-                T=T,
-                N=N)
-        )
+        # The importance part of the unfolded weight is simply L(x)**(gamma_n - gamma_{n-1}) evaluated at the seeds
+        # Therefore we use exactly Chopin's next_tempering_parameter function and feed in the seeds' log likelihoods
+        gammas.append(next_annealing_param(gammas[n-1], ESSrmin, -nlls[:, 0]))
         verboseprint("\tNew Gamma: ", gammas[n])
 
         # --- COMPUTE LOG-WEIGHTS AND FOLDED ESS ---
@@ -218,8 +151,6 @@ def smc_hmc_int_snip(N, T, _epsilons, _y, _Z, _scales, ESSrmin=0.9, seed=1234, v
         )
         mpds.append(np.sqrt(np.array(mips[-1]) * np.array(pds[-1])))
         n_unique.append(len(np.unique(A)))
-        k_resampled.append(k_indices)
-        n_resampled.append(n_indices)
         verboseprint("\tParticles resampled. MIPs: ", mips[-1], " PMs: ", pms[-1], " PDs: ", pds[-1],
                      " MPDs: ", mpds[-1])
 
@@ -244,32 +175,84 @@ def smc_hmc_int_snip(N, T, _epsilons, _y, _Z, _scales, ESSrmin=0.9, seed=1234, v
                 axis=1)
         )
 
-        # COMPUTE CRITERIA 1
-        # c1 = []
-        # c2 = []
-        # c3 = []
-        # for group in range(3):
-        #     c1.append(criteria_numerator(trajectories[iotas == group, :, :d], logw[iotas == group]))
-        #     c2.append(criteria_denominator1(trajectories[iotas == group, :, :d], logw[iotas == group]))
-        #     c3.append(c1[-1] / c2[-1])
-        # criteria1.append(c1)
-        # criteria2.append(c2)
-        # criteria3.append(c3)
-
-        # PRETEND
-        # criteria = np.zeros((3, T))
-        # for group in range(3):
-        #     xnk_group = trajectories[iotas == group]
-        #     logw_group = logw[iotas == group]
-        #     for t in range(1, T+1):
-        #         criteria[group, t-1] = criteria_numerator(xnk_group[:, :t, :d], logw_group[:, :t])
-        # criteria1.append(criteria)
-
-        # truncate first sum
-        criteria1.append(true_criterion(trajectories[:, :, :d], logw, iotas))
-        criteria2.append(uniform_criterion(trajectories[:, :, :d], iotas))
-        criteria3.append([c1/c2 for c1, c2 in zip(criteria1[-1], criteria2[-1])])
-
+        # --- ADAPT EPSILON ---
+        if adaptive:
+            if np.all(np.array(pms[-1]) <= pm_min):
+                # Step size is way too large, half it
+                epsilons = epsilons / mult
+                taus = epsilons * T
+                verboseprint("\t\t\tPMS<PM_MIN: T: ", T, " Epsilons: ", epsilons, " taus: ", taus)
+            else:
+                # Compute lmax for the whole population
+                lmax_groups = np.array([longest_batches[-1][iotas == group].max() for group in range(3)])
+                lmax = lmax_groups.max()  # Overall maximum U-turn index
+                verboseprint("\tLongest batch: ", lmax, " LB-Groups: ", lmax_groups)
+                # Assumption: step size too small when no U-turn is detected and mip/pm are high and ESS is borderline
+                if Tmin < lmax < T:  # U-turn detected: integration time is too large (we are doubling back)
+                    verboseprint("\tTmin < lmax < Tmax")
+                    # When 3 groups are equal, then we find the new integration time using lmax
+                    if np.all(taus == taus[0]) and np.all(epsilons == epsilons[0]):
+                        if (ESS_folded < ESSrmin*N) and np.all(ess_folded_by_group < ESSrmin*N/3):
+                            # Step size too large: create 3 groups with increasing (but smaller) step sizes
+                            taus = epsilons[0] * np.floor(
+                                np.quantile(longest_batches[-1], q=[0.5, 0.75, 1.0])
+                            ).astype(int)
+                            verboseprint("\t\t\tESS<alphaESS. taus: ", taus)
+                        else:
+                            # if everything is okay, simply reduce to the maximum U-turn index
+                            taus = lmax * epsilons
+                        epsilons = taus / T
+                        verboseprint("\t\tEpsilons: ", epsilons)
+                    else:
+                        # 3 groups have different epsilon/tau but the same T. Remember that we always keep T fixed,
+                        # meaning that we will use the U-turn statistics per group to adjust any step size/tau
+                        if (ess_folded_by_group[-1] < ESSrmin*N/3) and np.all(ess_folded_by_group[:-1] >= ESSrmin*N/3):
+                            # right group (large step size, small tau) has low ESS.
+                            # Keep left step size unchanged. Move right one between right one and middle one,
+                            # and then move middle one between left and right.
+                            epsilons = np.array([
+                                epsilons[0],
+                                0.5*epsilons[0] + 0.25*epsilons[1] + 0.25*epsilons[2],
+                                0.5*(epsilons[1] + epsilons[2])
+                            ])
+                            verboseprint("\t\t\tESS+<alphaESS/3: Epsilons: ", epsilons)
+                        elif np.all(ess_folded_by_group[-2:] < ESSrmin*N/3) and ess_folded_by_group[0] >= ESSrmin*N/3:
+                            # both middle and right group have low ESS.
+                            epsilons = np.array([
+                                epsilons[0],
+                                0.75*epsilons[0] + 0.25*epsilons[1],
+                                0.5*epsilons[0] + 0.5*epsilons[1]
+                            ])
+                            verboseprint("\t\t\tESS,ESS+<alphaESS/3: Epsilons: ", epsilons)
+                        elif ess_folded_by_group[0] < ESSrmin*N/3 and np.all(ess_folded_by_group[1:] >= ESSrmin*N/3):
+                            # left and middle have low ESS, if additionally no U-turn, then too small: increase
+                            if lmax_groups[0] <= Tmin:
+                                epsilons = np.array([
+                                    0.5*epsilons[1] + 0.5*epsilons[2],
+                                    0.25*epsilons[1] + 0.75*epsilons[2],
+                                    epsilons[2]
+                                ])
+                        else:
+                            # no group has low ESS (all 3 is almost impossible) therefore we just adjust based on
+                            # group-wise max U-turns HOWEVER we must be careful. All we know is that one of them is lmax
+                            # and that it satisfies Tmin < lmax < T. However there are some break-cases:
+                            # 1. It can be that one or two of them have lmax=0, or lmax<Tmin, more generally.
+                            # 2. It can be that lmax are all above Tmin, but maybe the resulting taus (and thus eps)
+                            # are not in increasing order.
+                            if np.all(Tmin < lmax_groups) and np.all(lmax_groups < T):
+                                potential_taus = lmax_groups * epsilons
+                                if np.all(potential_taus[:-1] <= potential_taus[1:]):  # True when in increasing order
+                                    epsilons = potential_taus / T
+                                else:  # not in increasing order, simply take the maximum U-turn index
+                                    epsilons = lmax * epsilons / T
+                        taus = epsilons * T
+                        verboseprint("\t\t\tTaus: ", taus)
+                else:
+                    # No longest batch detected + large MIP --> step size too small, need to increase it
+                    if np.all(np.array(mips[-1]) > 0.4):
+                        epsilons = epsilons * mult  # double the step sizes, keep Ts the same
+                        taus = epsilons * T  # there should be only one value TODO: CHECK
+                        verboseprint("\t\t\tMIPS>0.4: T: ", T, " Epsilons: ", epsilons, " taus: ", taus)
         # STORE
         epsilons_history.append(epsilons)
         tau_history.append(taus)
@@ -280,9 +263,7 @@ def smc_hmc_int_snip(N, T, _epsilons, _y, _Z, _scales, ESSrmin=0.9, seed=1234, v
     return {'logLt': logLt, 'pms': pms, 'mips': mips, 'ess': ess, 'longest_batches': longest_batches,
             'ess_running': ess_running, 'T': T, 'epsilons_history': epsilons_history, 'kappas': kappas,
             'ess_by_group': ess_by_group, 'pds': pds, 'mpds': mpds, 'gammas': gammas, 'logLt_traj': logLt_traj,
-            'tau_history': tau_history, 'n_unique': n_unique, 'runtime': time.time() - start_time,
-            'adapt_choice': adapt_choice, 'criteria1': criteria1, 'criteria2': criteria2, 'criteria3': criteria3,
-            'k_resampled': k_resampled, 'iotas_list': iotas_list, 'n_resampled': n_resampled}
+            'tau_history': tau_history, 'n_unique': n_unique, 'runtime': time.time() - start_time}
 
 
 if __name__ == "__main__":
@@ -295,22 +276,27 @@ if __name__ == "__main__":
     scales[0] = 20
 
     # Settings
-    n_runs = 5
+    n_runs = 10
+    n_eps = 20
     overall_seed = np.random.randint(low=10, high=29804393)  # 1234
     seeds = np.random.default_rng(overall_seed).integers(low=1, high=10000, size=n_runs)
-    _epsilons = np.array([1.0, 0.1, 0.01])
+    _epsilons = np.geomspace(start=0.001, stop=10.0, num=n_eps)
     _N = 1000
-    _T = 50
+    _T = 100
+    ALL_RESULTS = []
 
-    results = []
-    for i in range(n_runs):
-        res = {'N': _N, 'T': _T, 'epsilons': _epsilons}
-        out = smc_hmc_int_snip(N=_N, T=_T, _epsilons=_epsilons, ESSrmin=0.8, _y=y, _Z=Z, _scales=scales,
-                               verbose=False, seed=int(seeds[i]))
-        res.update({'type': 'tempering', 'logLt': out['logLt'], 'waste': False, 'out': out})
-        print("\t\tRun ", i, " LogLt: ", out['logLt'], " Final ESS: ", out['ess'][-1], 'final eps: ',
-              out['epsilons_history'][-1])
-        results.append(res)
+    for eps_ix, _epsilon in enumerate(_epsilons):
+        print("Epsilon: ", _epsilon)
+        results = []
+        for i in range(n_runs):
+            res = {'N': _N, 'T': _T, 'epsilon': _epsilon}
+            out = smc_hmc_int_snip(N=_N, T=_T, epsilon_init=_epsilon, ESSrmin=0.8, _y=y, _Z=Z, _scales=scales,
+                                   verbose=False, seed=int(seeds[i]), adaptive=True)
+            res.update({'type': 'tempering', 'logLt': out['logLt'], 'waste': False, 'out': out})
+            print("\t\tStep size: ", _epsilon, " LogLt: ", out['logLt'], " Final ESS: ", out['ess'][-1], 'final eps: ',
+                  out['epsilons_history'][-1])
+            results.append(res)
+        ALL_RESULTS.append(results)
 
-    with open(f"results/aar/results_1_01_001_tc_ub.pkl", "wb") as file:  #tc=true criteria, ub=uniform baseline
-        pickle.dump(results, file)
+    with open(f"results/aao/eps_gridsearch_adaptive_100runs_timed_new_NEWGRID.pkl", "wb") as file:
+        pickle.dump(ALL_RESULTS, file)

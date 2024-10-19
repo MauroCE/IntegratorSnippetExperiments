@@ -1,12 +1,43 @@
 """
-NO ADAPTATION, 3 EPSILONS, STORE CRITERIA ALONG SNIPPET. INTERMEDIARY DISTRIBUTIONS FOUND USING THE FULL WEIGHTS.
+baseline is incremental
 """
 import numpy as np
 from scipy.special import logsumexp
-from aaa_logistic_functions import sample_prior, next_annealing_param_unfolded
+from aaa_logistic_functions import sample_prior, next_annealing_param
 import numpy.linalg as la
 import pickle
 import time
+
+
+def construct_trajectories(T, x, v, epsilons_vector, gammas, nlp_gnlp_nll_and_gnll, _y, _Z, _scales, n):
+    N = x.shape[0]
+    d = x.shape[1]
+    # Setup storage
+    trajectories = np.full((N, T + 1, 2 * d), np.nan)
+    trajectories[:, 0] = np.hstack((x, v))
+    # Store only the log densities (used for log-weights), not gradients
+    nlps = np.full((N, T + 1), np.nan)  # Negative log priors
+    nlls = np.full((N, T + 1), np.nan)  # Negative log-likelihoods
+    # First half-momentum step
+    nlps[:, 0], gnlps, nlls[:, 0], gnlls = nlp_gnlp_nll_and_gnll(x, _y, _Z, _scales)
+    v = v - 0.5 * epsilons_vector * (gnlps + gammas[n - 1] * gnlls)  # (N, 61)
+    # T-1 full position and momentum steps
+    for k in range(T - 1):
+        # Full position step
+        x = x + epsilons_vector * v
+        # Full momentum step (compute nlls and gnlls)
+        nlps[:, k + 1], gnlps, nlls[:, k + 1], gnlls = nlp_gnlp_nll_and_gnll(x, _y, _Z, _scales)
+        v = v - epsilons_vector * (gnlps + gammas[n - 1] * gnlls)  # (N, 61)
+        # Store trajectory
+        trajectories[:, k + 1] = np.hstack((x, v))
+    # Final position half-step
+    x = x + epsilons_vector * v
+    # Final momentum half-step
+    nlps[:, -1], gnlps, nlls[:, -1], gnlls = nlp_gnlp_nll_and_gnll(x, _y, _Z, _scales)
+    v = v - 0.5 * epsilons_vector * (gnlps + gammas[n - 1] * gnlls)  # (N, 61)
+    # Store trajectories
+    trajectories[:, -1] = np.hstack((x, v))
+    return trajectories, nlps, nlls, v
 
 
 def nlp_gnlp_nll_and_gnll(_X, _y, _Z, _scales):
@@ -35,6 +66,7 @@ def compute_folded_ess_for_each_k(logw):
         W_folded = np.exp(logw_folded - logsumexp(logw_folded))
         folded_ess[k-1] = 1 / np.sum(W_folded**2)
     return folded_ess
+
 
 def criteria_numerator_upto_t(xnk, logw):
     """Only the outer expectation is truncated."""
@@ -70,6 +102,23 @@ def true_criterion(xnk, logw, iotas):
         flag = (iotas == group)
         sq_norm = np.linalg.norm(xnk[flag] - cond_exp[flag], axis=2)**2  # (NG, T+1)
         criteria.append(np.sum(sq_norm * W_unfolded[flag]))  # scalar for each grop
+    return criteria
+
+
+def true_criterion_truncated(xnk, logw, iotas):
+    """Computes the true criterion but with sum indexed by k truncated"""
+    T = xnk.shape[1] - 1
+    W_unfolded = np.exp(logw - logsumexp(logw))  # (N, T+1) complete set of unfolded weights
+    mu_k_eps_given_z = np.exp(logw - logsumexp(logw, axis=1, keepdims=True))  # (N, T+1)
+    cond_exp = np.sum(xnk * mu_k_eps_given_z[:, :, None], axis=1, keepdims=True)  # (N, 1, d)
+    criteria = np.zeros((3, T+1))
+    for t in range(T+1):
+        for group in range(3):
+            flag = (iotas == group)
+            sq_norm = np.linalg.norm(xnk[flag] - cond_exp[flag], axis=2)**2  # (NG, T+1)
+            criteria[group, t] = np.sum(
+                    (sq_norm * W_unfolded[flag])[:, :(t+1)]
+                )  # scalar for each grop
     return criteria
 
 
@@ -126,8 +175,7 @@ def smc_hmc_int_snip(N, T, _epsilons, _y, _Z, _scales, ESSrmin=0.9, seed=1234, v
     n = 1
 
     while gammas[n-1] < 1.0:
-        verboseprint("Iteration: ", n, " Gamma: ", gammas[n-1], " T: ", T, " epsilons: ", epsilons, " taus: ", taus,
-                     " c1: ", criteria1[-1], " c2: ", criteria2[-1], " c3: ", criteria3[-1])
+        verboseprint("Iteration: ", n, " Gamma: ", gammas[n-1], " T: ", T, " epsilons: ", epsilons, " taus: ", taus)
 
         # --- CHOOSE WHICH PARTICLES WILL BE ASSIGNED TO WHICH EPSILON/T COMBINATION.
         iotas = np.array(rng.choice(a=len(epsilons), size=N))  # one flag for each particle
@@ -166,15 +214,11 @@ def smc_hmc_int_snip(N, T, _epsilons, _y, _Z, _scales, ESSrmin=0.9, seed=1234, v
         lvn = - 0.5*np.linalg.norm(trajectories[:, :, d:], axis=2)**2
         lvd = - 0.5*np.linalg.norm(trajectories[:, 0, d:], axis=1)**2
         gammas.append(
-            next_annealing_param_unfolded(
+            next_annealing_param(
                 gamma=gammas[n-1],
-                ESSrmin=ESSrmin,
-                lvn=lvn,
-                lvd=lvd,
-                nlps=nlps,
-                nlls=nlls,
-                T=T,
-                N=N)
+                llk=(-nlls[:, 0]),
+                ESSrmin=ESSrmin
+            )
         )
         verboseprint("\tNew Gamma: ", gammas[n])
 
@@ -266,9 +310,10 @@ def smc_hmc_int_snip(N, T, _epsilons, _y, _Z, _scales, ESSrmin=0.9, seed=1234, v
         # criteria1.append(criteria)
 
         # truncate first sum
-        criteria1.append(true_criterion(trajectories[:, :, :d], logw, iotas))
-        criteria2.append(uniform_criterion(trajectories[:, :, :d], iotas))
-        criteria3.append([c1/c2 for c1, c2 in zip(criteria1[-1], criteria2[-1])])
+        criteria1.append(true_criterion(trajectories[:, :, :d], logw, iotas))  # each is a list of shape (3,)
+        criteria2.append(true_criterion_truncated(trajectories[:, :, :d], logw, iotas))  # each has shape (3, T+1)
+        # criteria 3 is incremental / total
+        criteria3.append(np.array(criteria1[-1])[:, None] / criteria2[-1])  # (3, T+1)
 
         # STORE
         epsilons_history.append(epsilons)
@@ -300,7 +345,7 @@ if __name__ == "__main__":
     seeds = np.random.default_rng(overall_seed).integers(low=1, high=10000, size=n_runs)
     _epsilons = np.array([1.0, 0.1, 0.01])
     _N = 1000
-    _T = 50
+    _T = 30
 
     results = []
     for i in range(n_runs):
@@ -312,5 +357,5 @@ if __name__ == "__main__":
               out['epsilons_history'][-1])
         results.append(res)
 
-    with open(f"results/aar/results_1_01_001_tc_ub.pkl", "wb") as file:  #tc=true criteria, ub=uniform baseline
+    with open(f"results/aas/results_1_01_001_tc_ib_newess_T30.pkl", "wb") as file:  #tc=true criteria, ib=incremental baseline
         pickle.dump(results, file)
